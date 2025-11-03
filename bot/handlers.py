@@ -3,11 +3,12 @@
 Содержит функции для обработки различных команд пользователей.
 """
 
-import os
 from telegram import Update
 from telegram.ext import ContextTypes
 from typing import Optional, Callable
 from datetime import datetime
+import asyncio
+import httpx
 
 from utils.logger import get_logger
 from services.image_generator import ImageGenerator
@@ -20,7 +21,7 @@ class CommandHandlers:
     Обеспечивает:
     - Обработку команды /start
     - Обработку команды /help
-    - Обработку команды /frog (тестовая генерация жабы)
+    - Обработку команды /frog (ручная генерация жабы)
     - Обработку команды /status (статус бота)
     """
     
@@ -34,6 +35,9 @@ class CommandHandlers:
         self.logger = get_logger(__name__)
         self.image_generator = image_generator
         self.next_run_provider = next_run_provider
+        # Инициализируем хранилище админов
+        from utils.admins_store import AdminsStore
+        self.admins_store = AdminsStore()
         
         # Rate limiting для /frog
         self._frog_rate_limit = {}  # {user_id: last_call_timestamp}
@@ -43,6 +47,42 @@ class CommandHandlers:
         self._global_frog_rate_limit_max = 10  # максимум запросов в окне
         
         self.logger.info("Обработчики команд инициализированы")
+    
+    async def _retry_on_connect_error(self, func, *args, max_retries=3, delay=2, **kwargs):
+        """
+        Выполняет функцию с повторными попытками при ошибках httpx.ConnectError.
+        
+        Args:
+            func: Асинхронная функция для выполнения
+            *args: Позиционные аргументы для функции
+            max_retries: Максимальное количество попыток (по умолчанию 3)
+            delay: Задержка между попытками в секундах (по умолчанию 2)
+            **kwargs: Именованные аргументы для функции
+            
+        Returns:
+            Результат выполнения функции
+            
+        Raises:
+            Последняя ошибка, если все попытки исчерпаны
+        """
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                return await func(*args, **kwargs)
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+                last_error = e
+                if attempt < max_retries:
+                    wait_time = delay * attempt  # Экспоненциальная задержка
+                    self.logger.warning(f"Ошибка подключения (попытка {attempt}/{max_retries}): {e}. Повтор через {wait_time}с...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    self.logger.error(f"Все {max_retries} попытки исчерпаны. Последняя ошибка: {e}")
+            except Exception as e:
+                # Для других ошибок не делаем повторных попыток
+                raise
+        
+        # Если дошли сюда, все попытки исчерпаны
+        raise last_error
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
@@ -71,39 +111,103 @@ class CommandHandlers:
             "/start - Показать это сообщение\n"
             "/help - Справка по командам\n"
             "/frog - Сгенерировать жабу прямо сейчас\n"
-            "/status - Статус бота\n"
             f"{next_run_info}"
         )
         
-        await update.message.reply_text(welcome_message)
-        self.logger.info("Отправлено приветственное сообщение")
+        try:
+            await self._retry_on_connect_error(
+                update.message.reply_text,
+                welcome_message,
+                max_retries=3,
+                delay=2
+            )
+            self.logger.info("Отправлено приветственное сообщение")
+        except Exception as e:
+            self.logger.error(f"Не удалось отправить приветственное сообщение после {3} попыток: {e}")
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
         Обработчик команды /help.
-        Показывает подробную справку по всем командам.
+        Показывает справку по командам. Для администраторов - расширенная админская справка,
+        для обычных пользователей - пользовательская справка.
         
         Args:
             update: Объект обновления Telegram
             context: Контекст бота
         """
-        self.logger.info(f"Получена команда /help от пользователя {update.effective_user.id}")
+        user_id = update.effective_user.id
+        self.logger.info(f"Получена команда /help от пользователя {user_id}")
         
-        help_message = (
-            "📚 Справка по командам Wednesday Frog Bot\n\n"
-            "🔹 /start - Приветствие и основная информация\n"
-            "🔹 /help - Эта справка\n"
-            "🔹 /frog - Сгенерировать изображение жабы прямо сейчас\n"
-            "🔹 /status - Показать статус бота\n\n"
-            "ℹ️ Информация:\n"
-            "• Планировщик включен (каждая среда)\n"
-            "• Изображения генерируются с помощью нейросети Kandinsky\n"
-            "• Логи сохраняются в папке logs/\n\n"
-            "🐛 Если что-то не работает, проверьте логи или обратитесь к администратору."
-        )
+        # Проверка доступа администратора
+        is_admin = self.admins_store.is_admin(user_id)
         
-        await update.message.reply_text(help_message)
-        self.logger.info("Отправлена справка")
+        if is_admin:
+            # Админская справка
+            next_run_hint = ""
+            if self.next_run_provider:
+                try:
+                    nxt = self.next_run_provider()
+                    if nxt:
+                        next_run_hint = f"\n   (Следующая отправка: {nxt.strftime('%Y-%m-%d %H:%M')})"
+                except Exception:
+                    pass
+
+            help_message = (
+                "🛠 Админ-справка по командам\n\n"
+                "Пользовательские команды:\n"
+                "• /start — приветствие и информация\n"
+                "• /help — эта справка\n"
+                "• /frog — сгенерировать жабу сейчас (rate limit, учитывается в лимитах)\n\n"
+                "Админ-команды:\n"
+                "• /status — расширенный статус: бот, планировщик, генерации, активные чаты, проверка API и метрики" + next_run_hint + "\n"
+                "• /add_chat <chat_id> — добавить чат в рассылку\n"
+                "• /remove_chat <chat_id> — удалить чат из рассылки\n"
+                "• /list_chats — список активных чатов с ID\n"
+                "• /force_send — принудительная отправка в подключенные чаты\n"
+                "• /set_kandinsky_model <pipeline_id> — установить модель Kandinsky\n"
+                "• /set_gigachat_model <model_name> — установить модель GigaChat\n"
+                "• /mod <user_id> — предоставить админ-права пользователю\n"
+                "• /unmod <user_id> — удалить админ-права у пользователя\n"
+                "• /list_mods — список всех админов с ID\n"
+                "• /help — эта справка"
+            )
+            self.logger.info("Отправлена админская справка")
+        else:
+            # Пользовательская справка
+            # Получаем информацию о следующей отправке
+            scheduler_info = ""
+            if self.next_run_provider:
+                try:
+                    next_dt = self.next_run_provider()
+                    if next_dt:
+                        # Определяем день недели на русском
+                        weekdays = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+                        weekday = weekdays[next_dt.weekday()]
+                        scheduler_info = f"\n• Ближайшая автоматическая отправка: {next_dt.strftime('%Y-%m-%d %H:%M')} ({weekday})"
+                except Exception:
+                    pass
+            
+            help_message = (
+                "📚 Справка по командам Wednesday Frog Bot\n\n"
+                "🔹 /start - Приветствие и основная информация\n"
+                "🔹 /help - Эта справка\n"
+                "🔹 /frog - Сгенерировать изображение жабы прямо сейчас\n\n"
+                "ℹ️ Информация:\n"
+                f"• Автоматическая отправка каждый раз по расписанию{scheduler_info}\n"
+                "• Изображения генерируются с помощью нейросети Kandinsky\n\n"
+                "🐛 Если что-то не работает, обратитесь к администратору."
+            )
+            self.logger.info("Отправлена пользовательская справка")
+        
+        try:
+            await self._retry_on_connect_error(
+                update.message.reply_text,
+                help_message,
+                max_retries=3,
+                delay=2
+            )
+        except Exception as e:
+            self.logger.error(f"Не удалось отправить справку после {3} попыток: {e}")
     
     async def frog_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
@@ -124,37 +228,72 @@ class CommandHandlers:
         recent_count = sum(self._global_frog_rate_limit.values())
         if recent_count >= self._global_frog_rate_limit_max:
             self.logger.warning(f"Глобальный rate limit /frog: {recent_count}/{self._global_frog_rate_limit_max}")
-            await update.message.reply_text("🚦 Слишком много запросов! Попробуйте через минуту.")
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "🚦 Слишком много запросов! Попробуйте через минуту.",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение о rate limit после {3} попыток: {e}")
             return
         
-        # Rate limit: per-user
-        last_call = self._frog_rate_limit.get(user_id, 0)
-        if now - last_call < self._frog_rate_limit_minutes * 60:
-            remaining = int(self._frog_rate_limit_minutes * 60 - (now - last_call))
-            self.logger.info(f"Rate limit для пользователя {user_id}: {remaining}с осталось")
-            await update.message.reply_text(f"⏰ Повторная генерация доступна через {remaining}с")
-            return
+        # Проверка на админа - пропускаем per-user rate limit для админа
+        is_admin = self.admins_store.is_admin(user_id)
         
-        self._frog_rate_limit[user_id] = now
+        # Rate limit: per-user (пропускаем для админа)
+        if not is_admin:
+            last_call = self._frog_rate_limit.get(user_id, 0)
+            if now - last_call < self._frog_rate_limit_minutes * 60:
+                remaining = int(self._frog_rate_limit_minutes * 60 - (now - last_call))
+                self.logger.info(f"Rate limit для пользователя {user_id}: {remaining}с осталось")
+                try:
+                    await self._retry_on_connect_error(
+                        update.message.reply_text,
+                        f"⏰ Повторная генерация доступна через {remaining}с",
+                        max_retries=3,
+                        delay=2
+                    )
+                except Exception as e:
+                    self.logger.error(f"Не удалось отправить сообщение о rate limit после {3} попыток: {e}")
+                return
+            
+            self._frog_rate_limit[user_id] = now
+        
         self._global_frog_rate_limit[now] = self._global_frog_rate_limit.get(now, 0) + 1
         
         # Проверяем лимит генераций (храним в application.bot_data)
         usage = context.application.bot_data.get("usage")
         if usage and not usage.can_use_frog():
             total, threshold, quota = usage.get_limits_info()
-            await update.message.reply_text(
-                (
-                    "🚫 Лимит ручных генераций на этот месяц исчерпан.\n"
-                    f"Использовано: {total}/{quota}. Доступ к /frog закрыт после {threshold}.\n"
-                    "Ожидайте автоматических отправок по средам."
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    (
+                        "🚫 Лимит ручных генераций на этот месяц исчерпан.\n"
+                        f"Использовано: {total}/{quota}. Доступ к /frog закрыт после {threshold}.\n"
+                        "Ожидайте автоматических отправок по средам."
+                    ),
+                    max_retries=3,
+                    delay=2
                 )
-            )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение о лимите после {3} попыток: {e}")
             return
 
         # Отправляем сообщение о начале генерации
-        status_message = await update.message.reply_text(
-            "🐸 Генерирую жабу для вас... Это может занять несколько секунд."
-        )
+        try:
+            status_message = await self._retry_on_connect_error(
+                update.message.reply_text,
+                "🐸 Генерирую жабу для вас... Это может занять несколько секунд.",
+                max_retries=3,
+                delay=2
+            )
+        except Exception as e:
+            self.logger.error(f"Не удалось отправить сообщение о начале генерации после {3} попыток: {e}")
+            # Продолжаем генерацию даже если не удалось отправить статус
+            status_message = None
         
         try:
             # Генерируем изображение жабы
@@ -164,9 +303,12 @@ class CommandHandlers:
                 image_data, caption = result
                 
                 # Отправляем изображение с подписью
-                await update.message.reply_photo(
+                await self._retry_on_connect_error(
+                    update.message.reply_photo,
                     photo=image_data,
-                    caption=caption
+                    caption=caption,
+                    max_retries=3,
+                    delay=2
                 )
                 # Сохраним локально результат
                 try:
@@ -186,53 +328,352 @@ class CommandHandlers:
                 
             else:
                 # Если генерация не удалась
-                await status_message.edit_text(
-                    "❌ К сожалению, не удалось сгенерировать изображение жабы. "
-                    "Попробуйте позже или обратитесь к администратору."
+                error_details = f"Не удалось сгенерировать изображение для пользователя {user_id}"
+                self.logger.error(error_details)
+                
+                # Удаляем статусное сообщение
+                try:
+                    await status_message.delete()
+                except Exception:
+                    pass
+                
+                # Отправляем дружелюбное сообщение пользователю
+                friendly_message = (
+                    "🐸 К сожалению, не удалось сгенерировать новую картинку.\n"
+                    "Но не расстраивайтесь! Вот случайная картинка из архива! 🎲"
                 )
-                self.logger.error(f"Не удалось сгенерировать изображение для пользователя {user_id}")
+                try:
+                    await self._retry_on_connect_error(
+                        update.message.reply_text,
+                        friendly_message,
+                        max_retries=3,
+                        delay=2
+                    )
+                except Exception as e:
+                    self.logger.error(f"Не удалось отправить дружелюбное сообщение после {3} попыток: {e}")
+                
+                # Отправляем случайное изображение из сохраненных
+                fallback_image = self.image_generator.get_random_saved_image()
+                if fallback_image:
+                    image_data, caption = fallback_image
+                    try:
+                        await self._retry_on_connect_error(
+                            update.message.reply_photo,
+                            photo=image_data,
+                            caption=caption,
+                            max_retries=3,
+                            delay=2
+                        )
+                    except Exception as e:
+                        self.logger.error(f"Не удалось отправить fallback изображение после {3} попыток: {e}")
+                    self.logger.info(f"Случайное изображение отправлено пользователю {user_id} как fallback")
+                else:
+                    self.logger.warning("Нет сохраненных изображений для отправки как fallback")
+                
+                # Отправляем детальное сообщение всем администраторам
+                all_admins = self.admins_store.list_all_admins()
+                if all_admins:
+                    admin_message = (
+                        "🔴 Ошибка генерации изображения по команде /frog\n\n"
+                        f"Пользователь: {user_id}\n"
+                        f"Детали: {error_details}\n"
+                        "Возможные причины: достигнут лимит API, circuit breaker активен, ошибка генерации\n\n"
+                        "Пользователю отправлено дружелюбное сообщение и случайное изображение из архива."
+                    )
+                    for admin_id in all_admins:
+                        try:
+                            await self._retry_on_connect_error(
+                                context.bot.send_message,
+                                chat_id=admin_id,
+                                text=admin_message,
+                                max_retries=3,
+                                delay=2
+                            )
+                        except Exception as admin_error:
+                            self.logger.error(f"Не удалось отправить сообщение об ошибке админу {admin_id} после {3} попыток: {admin_error}")
                 
         except Exception as e:
-            self.logger.error(f"Ошибка при обработке команды /frog: {e}")
-            await status_message.edit_text(
-                "❌ Произошла ошибка при генерации изображения. Попробуйте позже."
-            )
+            error_type = type(e).__name__
+            error_str = str(e)
+            
+            # Определяем тип ошибки для более информативного сообщения
+            if "ConnectError" in error_type or "ConnectionError" in error_type or "Connection" in error_str:
+                error_details = (
+                    f"Ошибка подключения к API при обработке команды /frog для пользователя {user_id}.\n"
+                    f"Тип: {error_type}\n"
+                    f"Детали: {error_str[:200]}\n\n"
+                    "Возможные причины:\n"
+                    "- Проблемы с интернет-соединением\n"
+                    "- Kandinsky API временно недоступен\n"
+                    "- Проблемы с прокси (если используется)\n"
+                    "- Блокировка доступа на стороне провайдера"
+                )
+            else:
+                error_details = f"Произошла ошибка при обработке команды /frog для пользователя {user_id}.\nТип: {error_type}\nДетали: {error_str[:200]}"
+            
+            self.logger.error(f"Ошибка при обработке /frog: {error_type} - {error_str}", exc_info=True)
+            
+            try:
+                # Пытаемся удалить статусное сообщение
+                await status_message.delete()
+            except Exception:
+                pass
+            
+            # Отправляем дружелюбное сообщение пользователю
+            try:
+                friendly_message = (
+                    "🐸 К сожалению, произошла ошибка при генерации.\n"
+                    "Но не расстраивайтесь! Вот случайная картинка из архива! 🎲"
+                )
+                await update.message.reply_text(friendly_message)
+                
+                # Отправляем случайное изображение из сохраненных
+                fallback_image = self.image_generator.get_random_saved_image()
+                if fallback_image:
+                    image_data, caption = fallback_image
+                    await update.message.reply_photo(
+                        photo=image_data,
+                        caption=caption
+                    )
+                    self.logger.info(f"Случайное изображение отправлено пользователю {user_id} как fallback")
+            except Exception as send_error:
+                self.logger.error(f"Не удалось отправить fallback сообщение/изображение: {send_error}")
+            
+            # Отправляем детальное сообщение всем администраторам
+            all_admins = self.admins_store.list_all_admins()
+            if all_admins:
+                try:
+                    import traceback
+                    full_error = traceback.format_exc()
+                    # Обрезаем трейс до последних 1500 символов (важная информация обычно в конце)
+                    max_trace_length = 1500
+                    if len(full_error) > max_trace_length:
+                        full_error = "..." + full_error[-max_trace_length:]
+                    
+                    admin_message = (
+                        "🔴 Ошибка при обработке команды /frog\n\n"
+                        f"Пользователь: {user_id}\n"
+                        f"Детали: {error_details}\n\n"
+                        f"Трейс (последние {max_trace_length} символов):\n{full_error}\n\n"
+                        "Пользователю отправлено дружелюбное сообщение и случайное изображение из архива."
+                    )
+                    
+                    # Разбиваем длинные сообщения на части (лимит Telegram: 4096 символов)
+                    max_message_length = 4000  # Оставляем запас
+                    for admin_id in all_admins:
+                        try:
+                            if len(admin_message) > max_message_length:
+                                # Отправляем короткую версию без полного трейса
+                                short_message = (
+                                    "🔴 Ошибка при обработке команды /frog\n\n"
+                                    f"Пользователь: {user_id}\n"
+                                    f"Детали: {error_details[:500]}\n\n"
+                                    "⚠️ Полный трейс слишком длинный, смотрите логи.\n\n"
+                                    "Пользователю отправлено дружелюбное сообщение и случайное изображение из архива."
+                                )
+                                await context.bot.send_message(
+                                    chat_id=admin_id,
+                                    text=short_message
+                                )
+                            else:
+                                await context.bot.send_message(
+                                    chat_id=admin_id,
+                                    text=admin_message
+                                )
+                        except Exception as admin_error:
+                            error_str = str(admin_error)
+                            # Если ошибка "Message is too long", отправляем сокращенную версию
+                            if "too long" in error_str.lower():
+                                try:
+                                    short_message = (
+                                        "🔴 Ошибка при обработке команды /frog\n\n"
+                                        f"Пользователь: {user_id}\n"
+                                        f"Детали: {error_details[:500]}\n\n"
+                                        "⚠️ Полный трейс слишком длинный для отправки, смотрите логи.\n\n"
+                                        "Пользователю отправлено дружелюбное сообщение и случайное изображение из архива."
+                                    )
+                                    await context.bot.send_message(
+                                        chat_id=admin_id,
+                                        text=short_message
+                                    )
+                                except Exception as retry_error:
+                                    self.logger.error(f"Не удалось отправить даже сокращенное сообщение админу {admin_id}: {retry_error}")
+                            else:
+                                self.logger.error(f"Не удалось отправить сообщение об ошибке админу {admin_id}: {admin_error}")
+                except Exception as e:
+                    self.logger.error(f"Ошибка при отправке сообщений админам: {e}")
     
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
         Обработчик команды /status.
-        Показывает текущий статус бота и информацию о следующей отправке.
+        Показывает расширенный статус бота (только для администратора).
+        Включает информацию о статусе бота, планировщике, лимитах, активных чатах,
+        проверку API и метрики производительности.
         
         Args:
             update: Объект обновления Telegram
             context: Контекст бота
         """
-        self.logger.info(f"Получена команда /status от пользователя {update.effective_user.id}")
+        user_id = update.effective_user.id
+        self.logger.info(f"Получена команда /status от пользователя {user_id}")
         
-        # Получаем информацию о статусе бота
-        bot_info = await context.bot.get_me()
-
-        next_run_line = ""
-        if self.next_run_provider:
+        # Проверка доступа администратора
+        if not self.admins_store.is_admin(user_id):
             try:
-                next_dt = self.next_run_provider()
-                if next_dt:
-                    next_run_line = f"📅 Следующая отправка: {next_dt.strftime('%Y-%m-%d %H:%M')}\n"
-            except Exception:
-                pass
-
-        status_message = (
-            f"🤖 Статус бота: {bot_info.first_name}\n\n"
-            "✅ Бот активен и работает\n"
-            f"{next_run_line}"
-            "🎨 Генератор изображений: Kandinsky API\n"
-            "📝 Логирование: включено\n\n"
-            "🔄 Последняя проверка: прямо сейчас\n"
-            "💚 Все системы работают нормально!"
-        )
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Доступно только администратору",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ограничении доступа после {3} попыток: {e}")
+            return
         
-        await update.message.reply_text(status_message)
-        self.logger.info("Отправлен статус бота")
+        try:
+            # Получаем информацию о статусе бота
+            bot_info = await context.bot.get_me()
+
+            # Информация о следующей отправке
+            next_run_line = ""
+            scheduler_status = "❌ Не настроен"
+            if self.next_run_provider:
+                try:
+                    next_dt = self.next_run_provider()
+                    if next_dt:
+                        next_run_line = f"📅 Следующая отправка: {next_dt.strftime('%Y-%m-%d %H:%M')}\n"
+                        scheduler_status = f"✅ Следующая отправка: {next_dt.strftime('%Y-%m-%d %H:%M')}"
+                except Exception:
+                    pass
+
+            # Проверяем API без генерации (dry-run)
+            api_status = "⏳ Проверка..."
+            api_models = []
+            current_kandinsky = (None, None)
+            try:
+                api_ok, api_status, api_models, current_kandinsky = await self.image_generator.check_api_status()
+                if not api_ok:
+                    self.logger.warning(f"Проверка API Kandinsky не прошла: {api_status}")
+            except Exception as e:
+                api_status = f"❌ Ошибка: {str(e)[:50]}"
+                self.logger.error(f"Ошибка при проверке API: {e}", exc_info=True)
+            
+            # Проверяем GigaChat API без траты токенов
+            gigachat_status = "N/A"
+            gigachat_models = []
+            current_gigachat = None
+            if self.image_generator.gigachat_client:
+                try:
+                    gigachat_ok, gigachat_status = self.image_generator.gigachat_client.check_api_status()
+                    if not gigachat_ok:
+                        self.logger.warning(f"Проверка API GigaChat не прошла: {gigachat_status}")
+                    # Получаем доступные модели GigaChat
+                    gigachat_models = self.image_generator.gigachat_client.get_available_models()
+                    from utils.models_store import ModelsStore
+                    models_store = ModelsStore()
+                    current_gigachat = models_store.get_gigachat_model() or "GigaChat"
+                except Exception as e:
+                    gigachat_status = f"❌ Ошибка: {str(e)[:50]}"
+                    self.logger.error(f"Ошибка при проверке GigaChat API: {e}", exc_info=True)
+            else:
+                gigachat_status = "⚠️  Не настроен (GIGACHAT_AUTHORIZATION_KEY не указан)"
+
+            # Информация об использовании и лимитах
+            usage = context.application.bot_data.get("usage")
+            usage_info = "N/A"
+            if usage:
+                total, threshold, quota = usage.get_limits_info()
+                used_percent = int(total / quota * 100) if quota else 0
+                usage_info = f"{total}/{quota} ({used_percent}%), порог: {threshold}"
+
+            # Информация об активных чатах
+            chats = context.application.bot_data.get("chats")
+            chats_info = "N/A"
+            if chats:
+                chats_info = len(chats.list_chat_ids())
+
+            # Метрики производительности (из /health)
+            metrics = context.application.bot_data.get("metrics")
+            metrics_text = "Не настроены"
+            if metrics:
+                m_sum = metrics.get_summary()
+                total_requests = m_sum['generations_total']
+                successful = m_sum['generations_success']
+                success_rate = (successful / total_requests * 100) if total_requests > 0 else 0
+                metrics_text = (
+                    f"• Всего запросов на генерацию: {total_requests}\n"
+                    f"• Успешных генераций: {successful}\n"
+                    f"• Процент успеха: {success_rate:.1f}%\n"
+                    f"• Среднее время генерации: {m_sum['average_generation_time']}\n"
+                    f"• Срабатываний circuit breaker: {m_sum['circuit_breaker_trips']}"
+                )
+
+            # Форматируем информацию о текущих моделях (только активные, не все доступные)
+            kandinsky_current_text = ""
+            if current_kandinsky[0]:
+                kandinsky_current_text = f"  ⭐ Текущая модель: {current_kandinsky[1] or current_kandinsky[0]}"
+            else:
+                kandinsky_current_text = "  ⚠️ Модель не выбрана"
+            
+            # Форматируем информацию о текущей модели GigaChat
+            gigachat_current_text = ""
+            if current_gigachat:
+                gigachat_current_text = f"  ⭐ Текущая модель: {current_gigachat}"
+            else:
+                gigachat_current_text = "  ⚠️ Модель не выбрана"
+            
+            status_message = (
+                f"🤖 Статус бота: {bot_info.first_name}\n\n"
+                "✅ Бот активен и работает\n"
+                f"{next_run_line}"
+                "🎨 Генератор изображений: Kandinsky API\n"
+                "📝 Логирование: включено\n\n"
+                "🔌 Проверка систем:\n"
+                f"• API Kandinsky: {api_status}\n"
+                f"{kandinsky_current_text}\n"
+                f"• API GigaChat: {gigachat_status}\n"
+                f"{gigachat_current_text}\n"
+                f"• Планировщик: {scheduler_status}\n\n"
+                "📊 Статистика:\n"
+                f"• Генерации: {usage_info}\n"
+                f"• Активных чатов: {chats_info}\n\n"
+                "📈 Метрики производительности:\n"
+                f"{metrics_text}\n\n"
+                "💡 Используйте /list_models для просмотра всех доступных моделей\n\n"
+                "🔄 Последняя проверка: прямо сейчас\n"
+                "💚 Все системы работают нормально!"
+            )
+            
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    status_message,
+                    max_retries=3,
+                    delay=2
+                )
+                self.logger.info("Отправлен статус бота")
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить статус после {3} попыток: {e}")
+                try:
+                    await self._retry_on_connect_error(
+                        update.message.reply_text,
+                        f"❌ Ошибка при получении статуса: {str(e)[:200]}",
+                        max_retries=3,
+                        delay=2
+                    )
+                except:
+                    pass
+        except Exception as e:
+            self.logger.error(f"Ошибка при получении статуса: {e}")
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    f"❌ Ошибка при получении статуса: {str(e)[:200]}",
+                    max_retries=3,
+                    delay=2
+                )
+            except:
+                pass
     
     async def unknown_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
@@ -251,62 +692,76 @@ class CommandHandlers:
             "Доступные команды:\n"
             "/start - Приветствие\n"
             "/help - Справка\n"
-            "/frog - Сгенерировать жабу\n"
-            "/status - Статус бота\n\n"
+            "/frog - Сгенерировать жабу\n\n"
             "Используйте /help для получения подробной информации."
         )
         
-        await update.message.reply_text(unknown_message)
-        self.logger.info("Отправлено сообщение о неизвестной команде")
-    
-    async def admin_status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Admin команда: статус лимитов и использования."""
-        admin_chat_id = os.getenv("ADMIN_CHAT_ID")
-        if admin_chat_id and str(update.effective_user.id) != admin_chat_id:
-            await update.message.reply_text("❌ Доступно только администратору")
-            return
-        
-        usage = context.application.bot_data.get("usage")
-        chats = context.application.bot_data.get("chats")
-        
-        usage_info = "N/A"
-        if usage:
-            total, threshold, quota = usage.get_limits_info()
-            used_percent = int(total / quota * 100) if quota else 0
-            usage_info = f"{total}/{quota} ({used_percent}%), порог: {threshold}"
-        
-        chats_info = "N/A"
-        if chats:
-            chats_info = len(chats.list_chat_ids())
-        
-        msg = (
-            "🔧 Админ-статус\n\n"
-            f"📊 Генерации: {usage_info}\n"
-            f"💬 Активных чатов: {chats_info}\n"
-            "✅ Система работает"
-        )
-        await update.message.reply_text(msg)
+        try:
+            await self._retry_on_connect_error(
+                update.message.reply_text,
+                unknown_message,
+                max_retries=3,
+                delay=2
+            )
+            self.logger.info("Отправлено сообщение о неизвестной команде")
+        except Exception as e:
+            self.logger.error(f"Не удалось отправить сообщение о неизвестной команде после {3} попыток: {e}")
     
     async def admin_force_send_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: принудительная отправка в чат."""
-        admin_chat_id = os.getenv("ADMIN_CHAT_ID")
-        if admin_chat_id and str(update.effective_user.id) != admin_chat_id:
-            await update.message.reply_text("❌ Доступно только администратору")
+        if not self.admins_store.is_admin(update.effective_user.id):
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Доступно только администратору",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ограничении доступа после {3} попыток: {e}")
             return
         
-        await update.message.reply_text("🔄 Запускаю принудительную отправку...")
-        # Здесь можно добавить вызов send_wednesday_frog()
-        await update.message.reply_text("✅ Отправка выполнена")
+        try:
+            await self._retry_on_connect_error(
+                update.message.reply_text,
+                "🔄 Запускаю принудительную отправку...",
+                max_retries=3,
+                delay=2
+            )
+            # Здесь можно добавить вызов send_wednesday_frog()
+            await self._retry_on_connect_error(
+                update.message.reply_text,
+                "✅ Отправка выполнена",
+                max_retries=3,
+                delay=2
+            )
+        except Exception as e:
+            self.logger.error(f"Ошибка при выполнении команды force_send после {3} попыток: {e}")
     
     async def admin_add_chat_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: добавить чат в рассылку."""
-        admin_chat_id = os.getenv("ADMIN_CHAT_ID")
-        if admin_chat_id and str(update.effective_user.id) != admin_chat_id:
-            await update.message.reply_text("❌ Доступно только администратору")
+        if not self.admins_store.is_admin(update.effective_user.id):
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Доступно только администратору",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ограничении доступа после {3} попыток: {e}")
             return
         
         if not context.args or len(context.args) == 0:
-            await update.message.reply_text("📝 Использование: /admin_add_chat <chat_id>")
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "📝 Использование: /add_chat <chat_id>",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об использовании команды после {3} попыток: {e}")
             return
         
         try:
@@ -314,19 +769,34 @@ class CommandHandlers:
             chats = context.application.bot_data.get("chats")
             if chats:
                 chats.add_chat(chat_id, "Manually added")
-                await update.message.reply_text(f"✅ Чат {chat_id} добавлен в рассылку")
+                try:
+                    await self._retry_on_connect_error(
+                        update.message.reply_text,
+                        f"✅ Чат {chat_id} добавлен в рассылку",
+                        max_retries=3,
+                        delay=2
+                    )
+                except Exception as e:
+                    self.logger.error(f"Не удалось отправить сообщение об успехе после {3} попыток: {e}")
         except ValueError:
-            await update.message.reply_text("❌ Неверный chat_id (должен быть числом)")
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Неверный chat_id (должен быть числом)",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ошибке после {3} попыток: {e}")
     
     async def admin_remove_chat_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: удалить чат из рассылки."""
-        admin_chat_id = os.getenv("ADMIN_CHAT_ID")
-        if admin_chat_id and str(update.effective_user.id) != admin_chat_id:
+        if not self.admins_store.is_admin(update.effective_user.id):
             await update.message.reply_text("❌ Доступно только администратору")
             return
         
         if not context.args or len(context.args) == 0:
-            await update.message.reply_text("📝 Использование: /admin_remove_chat <chat_id>")
+            await update.message.reply_text("📝 Использование: /remove_chat <chat_id>")
             return
         
         try:
@@ -338,74 +808,457 @@ class CommandHandlers:
         except ValueError:
             await update.message.reply_text("❌ Неверный chat_id (должен быть числом)")
     
-    async def health_check_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Health-check команда: статус всех систем."""
-        admin_chat_id = os.getenv("ADMIN_CHAT_ID")
-        if admin_chat_id and str(update.effective_user.id) != admin_chat_id:
-            await update.message.reply_text("❌ Доступно только администратору")
+    async def list_chats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Admin команда: список активных чатов с ID."""
+        user_id = update.effective_user.id
+        self.logger.info(f"Получена команда /list_chats от пользователя {user_id}")
+        
+        if not self.admins_store.is_admin(user_id):
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Доступно только администратору",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ограничении доступа после {3} попыток: {e}")
+            return
+        
+        chats = context.application.bot_data.get("chats")
+        if not chats:
+            self.logger.warning("Хранилище чатов не настроено")
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Хранилище чатов не настроено",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ошибке после {3} попыток: {e}")
+            return
+        
+        chat_ids = chats.list_chat_ids()
+        if not chat_ids:
+            self.logger.info("Нет активных чатов")
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "📭 Нет активных чатов",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение после {3} попыток: {e}")
+            return
+        
+        # Получаем информацию о чатах
+        chat_list = []
+        for chat_id in chat_ids:
+            try:
+                chat_info = await context.bot.get_chat(chat_id)
+                title = getattr(chat_info, 'title', getattr(chat_info, 'first_name', 'Unknown'))
+                chat_list.append(f"• {title} (ID: {chat_id})")
+            except Exception as e:
+                self.logger.warning(f"Не удалось получить информацию о чате {chat_id}: {e}")
+                chat_list.append(f"• Чат {chat_id} (не удалось получить информацию)")
+        
+        message = "📋 Активные чаты:\n\n" + "\n".join(chat_list)
+        try:
+            await self._retry_on_connect_error(
+                update.message.reply_text,
+                message,
+                max_retries=3,
+                delay=2
+            )
+            self.logger.info(f"Отправлен список из {len(chat_ids)} активных чатов пользователю {user_id}")
+        except Exception as e:
+            self.logger.error(f"Не удалось отправить список чатов после {3} попыток: {e}")
+    
+    async def set_kandinsky_model_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Admin команда: установить модель Kandinsky."""
+        if not self.admins_store.is_admin(update.effective_user.id):
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Доступно только администратору",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ограничении доступа после {3} попыток: {e}")
+            return
+        
+        if not context.args or len(context.args) == 0:
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    (
+                        "📝 Использование: /set_kandinsky_model <pipeline_id или название модели>\n\n"
+                        "Используйте /list_models для просмотра доступных моделей.\n"
+                        "Можно указать как ID (например: 12345678), так и название модели (например: kandinsky-2.2)"
+                    ),
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об использовании команды после {3} попыток: {e}")
+            return
+        
+        model_arg = " ".join(context.args)  # Объединяем аргументы на случай названий с пробелами
+        try:
+            await self._retry_on_connect_error(
+                update.message.reply_text,
+                "⏳ Устанавливаю модель...",
+                max_retries=3,
+                delay=2
+            )
+        except Exception as e:
+            self.logger.error(f"Не удалось отправить сообщение о начале установки после {3} попыток: {e}")
+        
+        try:
+            success, message = await self.image_generator.set_kandinsky_model(model_arg)
+            if success:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    f"✅ {message}",
+                    max_retries=3,
+                    delay=2
+                )
+            else:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    f"❌ {message}",
+                    max_retries=3,
+                    delay=2
+                )
+        except Exception as e:
+            self.logger.error(f"Ошибка при установке модели Kandinsky: {e}")
+    
+    async def set_gigachat_model_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Admin команда: установить модель GigaChat."""
+        if not self.admins_store.is_admin(update.effective_user.id):
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Доступно только администратору",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ограничении доступа после {3} попыток: {e}")
+            return
+        
+        if not context.args or len(context.args) == 0:
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "📝 Использование: /set_gigachat_model <model_name>\n\nИспользуйте /list_models для просмотра доступных моделей.",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об использовании команды после {3} попыток: {e}")
+            return
+        
+        model_name = context.args[0]
+        
+        if not self.image_generator.gigachat_client:
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ GigaChat клиент не инициализирован",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ошибке после {3} попыток: {e}")
             return
         
         try:
-            # Проверяем API
-            api_status = "✅ Работает"
-            try:
-                result = await self.image_generator.generate_frog_image(metrics=context.application.bot_data.get("metrics"))
-                api_status = "✅ Работает" if result else "⚠️  Проблемы генерации"
-            except Exception as e:
-                api_status = f"❌ Ошибка: {str(e)[:50]}"
-            
-            # Статус планировщика
-            next_run = self.next_run_provider() if self.next_run_provider else None
-            scheduler_status = f"✅ Следующая отправка: {next_run.strftime('%Y-%m-%d %H:%M')}" if next_run else "❌ Не настроен"
-            
-            # Метрики
-            metrics = context.application.bot_data.get("metrics")
-            if metrics:
-                m_sum = metrics.get_summary()
-                metrics_text = f"Генераций успешно: {m_sum['generations_success']}\nСреднее время: {m_sum['average_generation_time']}\nCircuit breaker: {m_sum['circuit_breaker_trips']}"
+            success = self.image_generator.gigachat_client.set_model(model_name)
+            if success:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    f"✅ Модель GigaChat установлена: {model_name}",
+                    max_retries=3,
+                    delay=2
+                )
             else:
-                metrics_text = "Не настроены"
-            
-            msg = (
-                "🏥 Health Check\n\n"
-                f"🔌 API: {api_status}\n"
-                f"⏰ Планировщик: {scheduler_status}\n"
-                f"📊 Метрики:\n{metrics_text}"
-            )
-            await update.message.reply_text(msg)
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    f"❌ Модель {model_name} не найдена в списке доступных",
+                    max_retries=3,
+                    delay=2
+                )
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка health-check: {str(e)}")
-
-    async def admin_help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Admin команда: показать все доступные команды с описанием."""
-        admin_chat_id = os.getenv("ADMIN_CHAT_ID")
-        if admin_chat_id and str(update.effective_user.id) != admin_chat_id:
-            await update.message.reply_text("❌ Доступно только администратору")
-            return
-
-        next_run_hint = ""
-        if self.next_run_provider:
+            self.logger.error(f"Ошибка при установке модели GigaChat: {e}")
+    
+    async def mod_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Admin команда: добавить администратора."""
+        if not self.admins_store.is_admin(update.effective_user.id):
             try:
-                nxt = self.next_run_provider()
-                if nxt:
-                    next_run_hint = f"\n   (Следующая отправка: {nxt.strftime('%Y-%m-%d %H:%M')})"
-            except Exception:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Доступно только администратору",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ограничении доступа после {3} попыток: {e}")
+            return
+        
+        if not context.args or len(context.args) == 0:
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "📝 Использование: /mod <user_id>",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об использовании команды после {3} попыток: {e}")
+            return
+        
+        try:
+            user_id = int(context.args[0])
+            success = self.admins_store.add_admin(user_id)
+            if success:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    f"✅ Пользователь {user_id} получил админ-права",
+                    max_retries=3,
+                    delay=2
+                )
+            else:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    f"ℹ️ Пользователь {user_id} уже является администратором",
+                    max_retries=3,
+                    delay=2
+                )
+        except ValueError:
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Неверный user_id (должен быть числом)",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ошибке после {3} попыток: {e}")
+    
+    async def unmod_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Admin команда: удалить администратора."""
+        if not self.admins_store.is_admin(update.effective_user.id):
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Доступно только администратору",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ограничении доступа после {3} попыток: {e}")
+            return
+        
+        if not context.args or len(context.args) == 0:
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "📝 Использование: /unmod <user_id>",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об использовании команды после {3} попыток: {e}")
+            return
+        
+        try:
+            user_id = int(context.args[0])
+            # Проверяем, не пытаются ли удалить главного админа
+            from utils.config import config
+            main_admin = config.admin_chat_id
+            if main_admin and int(main_admin) == user_id:
+                try:
+                    await self._retry_on_connect_error(
+                        update.message.reply_text,
+                        "❌ Нельзя удалить главного администратора (из .env)",
+                        max_retries=3,
+                        delay=2
+                    )
+                except Exception as e:
+                    self.logger.error(f"Не удалось отправить сообщение об ошибке после {3} попыток: {e}")
+                return
+            
+            success = self.admins_store.remove_admin(user_id)
+            if success:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    f"✅ У пользователя {user_id} удалены админ-права",
+                    max_retries=3,
+                    delay=2
+                )
+            else:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    f"ℹ️ Пользователь {user_id} не является администратором",
+                    max_retries=3,
+                    delay=2
+                )
+        except ValueError:
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Неверный user_id (должен быть числом)",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ошибке после {3} попыток: {e}")
+    
+    async def list_mods_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Admin команда: список всех админов с ID."""
+        user_id = update.effective_user.id
+        self.logger.info(f"Получена команда /list_mods от пользователя {user_id}")
+        
+        if not self.admins_store.is_admin(user_id):
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Доступно только администратору",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ограничении доступа после {3} попыток: {e}")
+            return
+        
+        all_admins = self.admins_store.list_all_admins()
+        if not all_admins:
+            self.logger.info("Нет администраторов")
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "📭 Нет администраторов",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение после {3} попыток: {e}")
+            return
+        
+        admin_list = []
+        from utils.config import config
+        main_admin = config.admin_chat_id
+        for admin_id in all_admins:
+            is_main = " (главный)" if (main_admin and int(main_admin) == admin_id) else ""
+            admin_list.append(f"• ID: {admin_id}{is_main}")
+        
+        message = "👥 Список администраторов:\n\n" + "\n".join(admin_list)
+        try:
+            await self._retry_on_connect_error(
+                update.message.reply_text,
+                message,
+                max_retries=3,
+                delay=2
+            )
+            self.logger.info(f"Отправлен список из {len(all_admins)} администраторов пользователю {user_id}")
+        except Exception as e:
+            self.logger.error(f"Не удалось отправить список админов после {3} попыток: {e}")
+            raise
+    
+    async def list_models_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Admin команда: список всех доступных моделей Kandinsky и GigaChat."""
+        user_id = update.effective_user.id
+        self.logger.info(f"Получена команда /list_models от пользователя {user_id}")
+        
+        if not self.admins_store.is_admin(user_id):
+            await self._retry_on_connect_error(
+                update.message.reply_text,
+                "❌ Доступно только администратору",
+                max_retries=3,
+                delay=2
+            )
+            return
+        
+        try:
+            message_parts = ["📋 Доступные модели:\n"]
+            
+            # Получаем модели Kandinsky
+            try:
+                api_ok, api_status, api_models, current_kandinsky = await self.image_generator.check_api_status()
+                if api_models:
+                    message_parts.append("🎨 Kandinsky (Kandinsky API):")
+                    for model in api_models:
+                        # Проверяем, является ли эта модель текущей
+                        is_current = ""
+                        if current_kandinsky[0]:
+                            # Извлекаем ID из строки модели (формат: "Name (ID: 123)")
+                            model_str = str(model)
+                            if current_kandinsky[0] in model_str:
+                                is_current = " ⭐"
+                        message_parts.append(f"  • {model}{is_current}")
+                else:
+                    message_parts.append("🎨 Kandinsky: не удалось получить список моделей")
+                    if current_kandinsky[0]:
+                        message_parts.append(f"  Текущая: {current_kandinsky[1] or current_kandinsky[0]}")
+            except Exception as e:
+                self.logger.error(f"Ошибка при получении моделей Kandinsky: {e}")
+                message_parts.append("🎨 Kandinsky: ошибка при получении списка моделей")
+                from utils.models_store import ModelsStore
+                models_store = ModelsStore()
+                current_kandinsky_id, current_kandinsky_name = models_store.get_kandinsky_model()
+                if current_kandinsky_id:
+                    message_parts.append(f"  Текущая: {current_kandinsky_name or current_kandinsky_id}")
+            
+            message_parts.append("")  # Пустая строка между секциями
+            
+            # Получаем модели GigaChat
+            try:
+                if self.image_generator.gigachat_client:
+                    gigachat_models = self.image_generator.gigachat_client.get_available_models()
+                    from utils.models_store import ModelsStore
+                    models_store = ModelsStore()
+                    current_gigachat = models_store.get_gigachat_model()
+                    
+                    message_parts.append("🤖 GigaChat (GigaChat API):")
+                    for model in gigachat_models:
+                        is_current = " ⭐" if (current_gigachat and model == current_gigachat) else ""
+                        message_parts.append(f"  • {model}{is_current}")
+                else:
+                    message_parts.append("🤖 GigaChat: не настроен (GIGACHAT_AUTHORIZATION_KEY не указан)")
+            except Exception as e:
+                self.logger.error(f"Ошибка при получении моделей GigaChat: {e}")
+                message_parts.append("🤖 GigaChat: ошибка при получении списка моделей")
+                from utils.models_store import ModelsStore
+                models_store = ModelsStore()
+                current_gigachat = models_store.get_gigachat_model()
+                if current_gigachat:
+                    message_parts.append(f"  Текущая: {current_gigachat}")
+            
+            message = "\n".join(message_parts)
+            
+            # Проверяем длину сообщения (лимит Telegram: 4096 символов)
+            if len(message) > 4000:
+                message = "\n".join(message_parts[:len(message_parts)//2]) + "\n\n⚠️ Сообщение обрезано, часть моделей не показана"
+            
+            await self._retry_on_connect_error(
+                update.message.reply_text,
+                message,
+                max_retries=3,
+                delay=2
+            )
+            self.logger.info(f"Отправлен список моделей пользователю {user_id}")
+        except Exception as e:
+            self.logger.error(f"Ошибка при получении списка моделей: {e}", exc_info=True)
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    f"❌ Ошибка при получении списка моделей: {str(e)[:200]}",
+                    max_retries=3,
+                    delay=2
+                )
+            except:
                 pass
-
-        msg = (
-            "🛠 Админ-справка по командам\n\n"
-            "Пользовательские команды:\n"
-            "• /start — приветствие и информация\n"
-            "• /help — базовая справка по командам\n"
-            "• /frog — сгенерировать жабу сейчас (rate limit, учитывается в лимитах)\n"
-            "• /status — статус бота и планировщика" + next_run_hint + "\n\n"
-            "Админ-команды:\n"
-            "• /admin_status — сводка по генерациям и активным чатам\n"
-            "• /admin_add_chat <chat_id> — добавить чат в рассылку\n"
-            "• /admin_remove_chat <chat_id> — удалить чат из рассылки\n"
-            "• /admin_force_send — принудительная отправка в подключенные чаты\n"
-            "• /health — проверка API/планировщика/метрик\n"
-            "• /admin_help — эта справка"
-        )
-
-        await update.message.reply_text(msg)

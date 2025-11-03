@@ -54,6 +54,39 @@ GENERATION_TIMEOUT=60
 # При неудаче бот попробует еще раз
 MAX_RETRIES=3
 
+# ===== GIGACHAT НАСТРОЙКИ (для генерации промптов) =====
+
+# Authorization key для GigaChat API (Base64 encoded)
+# Получите на https://developers.sber.ru/ (нужна регистрация)
+# Формат: Base64 строка (например: R1JhbnQ6...)
+# ВАЖНО: Это ключ для генерации промптов через нейросеть GigaChat
+# Если не указано, будет использоваться fallback на статические промпты
+GIGACHAT_AUTHORIZATION_KEY=
+
+# URL для аутентификации GigaChat (опционально, по умолчанию используется стандартный)
+# GIGACHAT_AUTH_URL=https://ngw.devices.sberbank.ru:9443/api/v2/oauth
+
+# URL для API запросов GigaChat (опционально, по умолчанию используется стандартный)
+# GIGACHAT_API_URL=https://gigachat.devices.sberbank.ru/api/v1/chat/completions
+
+# Scope для аутентификации (опционально, по умолчанию: GIGACHAT_API_PERS)
+# GIGACHAT_SCOPE=GIGACHAT_API_PERS
+
+# Модель GigaChat для использования (опционально, по умолчанию: GigaChat)
+# GIGACHAT_MODEL=GigaChat
+
+# Путь к файлу сертификата для GigaChat API (опционально)
+# Если указан, будет использоваться этот сертификат вместо стандартных
+# Пример: certs/russiantrustedca.pem или /путь/к/сертификату.pem
+# Приоритет: если указан GIGACHAT_CERT_PATH, он используется; иначе проверяется GIGACHAT_VERIFY_SSL
+# GIGACHAT_CERT_PATH=certs/russiantrustedca.pem
+
+# Проверять SSL сертификаты для GigaChat (опционально, по умолчанию: true)
+# Используется только если GIGACHAT_CERT_PATH не указан
+# Установите false если есть проблемы с сертификатами и сертификат не указан
+# ВНИМАНИЕ: Отключение проверки SSL снижает безопасность!
+# GIGACHAT_VERIFY_SSL=true
+
 # ===== АДМИН НАСТРОЙКИ =====
 
 # ID администратора для доступа к админ-командам (опционально)
@@ -74,6 +107,12 @@ DISPATCH_REGISTRY_STORAGE=data/dispatch_registry.json
 
 # Путь к метрикам производительности
 METRICS_STORAGE=data/metrics.json
+
+# Путь к настройкам моделей (Kandinsky и GigaChat)
+MODELS_STORAGE=data/models.json
+
+# Путь к списку администраторов
+ADMINS_STORAGE=data/admins.json
 
 # ===== ПРОКСИ (опционально) =====
 

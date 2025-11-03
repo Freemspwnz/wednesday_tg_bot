@@ -154,3 +154,6 @@ Thumbs.db
 
 # Statistics
 data/
+
+# Certificates
+*.pem

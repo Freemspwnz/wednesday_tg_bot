@@ -85,9 +85,16 @@ class BotRunner:
             # Создаем экземпляр бота
             self.bot = WednesdayBot()
             
-            # Получаем информацию о боте
-            bot_info = await self.bot.get_bot_info()
-            self.logger.info(f"Информация о боте: {bot_info}")
+            # Получаем информацию о боте (не блокируем запуск при ошибке)
+            try:
+                bot_info = await self.bot.get_bot_info()
+                if "error" in bot_info:
+                    self.logger.warning(f"Не удалось получить информацию о боте: {bot_info.get('error_message', bot_info.get('error', 'Unknown error'))}")
+                    self.logger.info("Продолжаю запуск бота...")
+                else:
+                    self.logger.info(f"Информация о боте: {bot_info}")
+            except Exception as e:
+                self.logger.warning(f"Критическая ошибка при получении информации о боте: {e}. Продолжаю запуск...")
             
             # Настраиваем обработчики сигналов ПОСЛЕ создания асинхронного контекста
             loop = asyncio.get_running_loop()

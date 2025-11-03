@@ -78,16 +78,17 @@ Utils Layer (utils/)
 - `/start` — приветствие и основная информация
 - `/help` — справка по пользовательским командам
 - `/frog` — генерация жабы по запросу
-- `/status` — статус бота и планировщика
 - Обработка неизвестных команд
 
 **Админ-команды:**
-- `/admin_status` — статистика использования
-- `/admin_add_chat` — добавление чата в рассылку
-- `/admin_remove_chat` — удаление чата
-- `/health` — health-check всех систем
-- `/admin_force_send` — принудительная отправка
-- `/admin_help` - справка по всем командам
+- `/status` — статус бота (dry-run проверки Kandinsky/GigaChat, метрики, текущие модели)
+- `/force_send` — принудительная отправка
+- `/add_chat <chat_id>` / `/remove_chat <chat_id>` — управление чатами
+- `/list_chats` — список активных чатов
+- `/set_kandinsky_model <pipeline_id|name>` — смена модели Kandinsky
+- `/set_gigachat_model <model_name>` — смена модели GigaChat
+- `/list_models` — доступные модели (обе системы)
+- `/mod <user_id>` / `/unmod <user_id>` / `/list_mods` — управление администраторами
 
 **Rate limiting:**
 - Per-user: 5 минут между запросами
@@ -110,9 +111,8 @@ Utils Layer (utils/)
   - Максимум 3 попытки
   - Exponential backoff
   - Обработка timeout
-- **15 уникальных промптов**:
-  - Различные сценарии (superhero, chef, scientist и др.)
-  - 7 стилей для разнообразия
+- **Промпты через GigaChat** с fallback на статические при недоступности API
+- **Dry-run**: `check_api_status()` запрашивает `/pipelines` без траты генераций и сохраняет список моделей
 - **Обработка изображений**:
   - Base64 декодирование
   - Валидация через Pillow
@@ -159,7 +159,7 @@ Utils Layer (utils/)
 - Константы для генерации изображений
 
 **Основные классы:**
-- `Config` — основная конфигурация
+- `Config` — основная конфигурация (включая GigaChat и сертификаты)
 - `ImageConfig` — настройки изображений
 - `SchedulerConfig` — настройки планировщика
 
@@ -262,7 +262,7 @@ Utils Layer (utils/)
 - Health-check данные
 
 **Метрики:**
-- Генерации (success, failed, retries)
+- Генерации (успешные, всего, процент успеха)
 - Время генерации (total, average)
 - Circuit breaker trips
 - Dispatch statistics
@@ -433,10 +433,10 @@ Chat: added bot
 
 ### Health Check
 
-Команда `/health` проверяет:
-- Доступность Kandinsky API
-- Состояние планировщика
-- Метрики производительности
+Команда `/status` (только админ) включает:
+- Dry-run проверку Kandinsky (список моделей, текущая модель)
+- Dry-run проверку GigaChat (получение токена, список моделей)
+- Метрики и статус планировщика
 
 ## Тестирование
 

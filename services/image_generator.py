@@ -11,7 +11,7 @@ import base64
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from PIL import Image
 
 from utils.logger import get_logger
@@ -44,7 +44,7 @@ class ImageGenerator:
         self.circuit_breaker_cooldown = 300  # 5 минут
         self.circuit_breaker_open_until = None
         
-        # Промпт для генерации жабы
+        # Промпт для генерации жабы (fallback)
         self.frog_prompt = ImageConfig.FROG_PROMPTS
         self.style = ImageConfig.STYLES
         
@@ -57,6 +57,24 @@ class ImageGenerator:
         
         # Поддержка прокси
         self.proxy_url = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+        
+        # Инициализация GigaChat клиента для генерации промптов
+        self.gigachat_enabled = False
+        self.gigachat_client = None
+        if config.gigachat_authorization_key:
+            try:
+                from services.prompt_generator import GigaChatClient
+                self.gigachat_client = GigaChatClient()
+                # Проверяем подключение
+                if self.gigachat_client.test_connection():
+                    self.gigachat_enabled = True
+                    self.logger.info("GigaChat клиент успешно инициализирован. Промпты будут генерироваться через GigaChat.")
+                else:
+                    self.logger.warning("Не удалось подключиться к GigaChat. Будет использоваться fallback на статические промпты.")
+            except Exception as e:
+                self.logger.warning(f"Ошибка инициализации GigaChat клиента: {e}. Будет использоваться fallback на статические промпты.")
+        else:
+            self.logger.info("GIGACHAT_AUTHORIZATION_KEY не установлен. Будет использоваться fallback на статические промпты.")
         
         self.logger.info("Генератор изображений инициализирован")
     
@@ -89,12 +107,12 @@ class ImageGenerator:
         caption = random.choice(self.captions)
         self.logger.info(f"Выбрана подпись: {caption}")
         
-        # Выбираем случайный промпт и стиль для разнообразия
-        frog_prompt = random.choice(ImageConfig.FROG_PROMPTS)
-        style = random.choice(ImageConfig.STYLES)
+        # Генерируем промпт через GigaChat или используем fallback
+        full_prompt = await self._generate_prompt()
+        if not full_prompt:
+            self.logger.warning("Не удалось сгенерировать промпт, используем fallback")
+            full_prompt = self._get_fallback_prompt()
         
-        # Формируем полный промпт
-        full_prompt = f"{frog_prompt}, {style}, high quality, detailed, Wednesday frog meme"
         self.logger.info(f"Промпт для генерации: {full_prompt}")
         
         # Пытаемся сгенерировать изображение с повторными попытками
@@ -197,13 +215,112 @@ class ImageGenerator:
         except asyncio.TimeoutError:
             self.logger.error("Таймаут при генерации изображения")
             return None
-        except Exception as e:
-            self.logger.error(f"Ошибка при запросе к API: {e}")
+        except aiohttp.ClientConnectorError as e:
+            self.logger.error(f"Ошибка подключения к Kandinsky API: {e}. Возможные причины: проблемы с сетью, недоступность сервера, проблемы с прокси.")
             return None
+        except aiohttp.ClientError as e:
+            self.logger.error(f"Ошибка клиента при запросе к Kandinsky API: {e}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Неожиданная ошибка при запросе к Kandinsky API: {e}", exc_info=True)
+            return None
+    
+    async def check_api_status(self, save_models: bool = True) -> Tuple[bool, str, List[str], Tuple[Optional[str], Optional[str]]]:
+        """
+        Проверяет статус API и валидность ключа без генерации изображения (dry-run).
+        
+        Returns:
+            Кортеж (успех_проверки, сообщение_о_статусе, список_моделей, (текущий_pipeline_id, текущее_имя))
+        """
+        self.logger.debug(f"Начало проверки статуса Kandinsky (save_models={save_models})")
+        headers = {
+            "X-Key": f"Key {self.api_key}",
+            "X-Secret": f"Secret {self.secret_key}",
+        }
+        
+        try:
+            timeout = aiohttp.ClientTimeout(
+                total=15,  # Короткий таймаут для проверки
+                connect=5,
+                sock_read=10
+            )
+            
+            connector = None
+            if self.proxy_url:
+                connector = aiohttp.ProxyConnector.from_url(self.proxy_url)
+            
+            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                # Проверка статуса ключа через эндпоинт pipelines (более надежный способ)
+                status_ok = False
+                status_message = "❌ Ошибка проверки"
+                
+                # Получаем список моделей (pipelines) и одновременно проверяем доступность API
+                models_list = []
+                current_pipeline_id = None
+                current_pipeline_name = None
+                try:
+                    from utils.models_store import ModelsStore
+                    models_store = ModelsStore()
+                    current_pipeline_id, current_pipeline_name = models_store.get_kandinsky_model()
+                    
+                    self.logger.debug("Выполняю запрос списка pipelines для dry-run статуса")
+                    async with session.get(f"{self.base_url}/key/api/v1/pipelines", headers=headers) as response:
+                        if response.status == 200:
+                            status_ok = True
+                            status_message = "✅ API доступен, ключ валиден"
+                            pipelines_data = await response.json()
+                            if isinstance(pipelines_data, list) and len(pipelines_data) > 0:
+                                # Сохраняем список моделей в хранилище
+                                if save_models:
+                                    models_store.set_kandinsky_available_models(pipelines_data)
+                                    self.logger.debug(f"Сохранен список из {len(pipelines_data)} моделей Kandinsky")
+                                
+                                for pipeline in pipelines_data:
+                                    model_name = pipeline.get('name', 'Unknown')
+                                    model_id = pipeline.get('id', 'N/A')
+                                    is_current = " ⭐" if (current_pipeline_id and model_id == current_pipeline_id) else ""
+                                    models_list.append(f"{model_name} (ID: {model_id}){is_current}")
+                            else:
+                                models_list = ["Модели не найдены"]
+                        elif response.status == 401:
+                            status_message = "❌ Неверный API ключ или секретный ключ"
+                            status_ok = False
+                            models_list = ["Требуется проверка авторизации"]
+                        elif response.status == 403:
+                            status_message = "❌ Доступ запрещен (проверьте права ключа)"
+                            status_ok = False
+                            models_list = ["Нет доступа к моделям"]
+                        else:
+                            status_message = f"⚠️  Ошибка API: {response.status}"
+                            status_ok = False
+                            models_list = [f"Ошибка получения моделей: {response.status}"]
+                except asyncio.TimeoutError:
+                    status_message = "❌ Таймаут при проверке API"
+                    status_ok = False
+                    models_list = ["Таймаут при запросе"]
+                except Exception as e:
+                    status_message = f"❌ Ошибка проверки: {str(e)[:50]}"
+                    status_ok = False
+                    models_list = [f"Ошибка: {str(e)[:50]}"]
+                
+                self.logger.debug(
+                    "Завершена проверка статуса Kandinsky: ok=%s, models=%d, current=(%s, %s)",
+                    status_ok,
+                    len(models_list),
+                    current_pipeline_id,
+                    current_pipeline_name,
+                )
+                return status_ok, status_message, models_list, (current_pipeline_id, current_pipeline_name)
+                
+        except asyncio.TimeoutError:
+            return False, "❌ Таймаут при подключении к API", [], (None, None)
+        except Exception as e:
+            return False, f"❌ Ошибка подключения: {str(e)[:50]}", [], (None, None)
     
     async def _get_pipeline_id(self, session: aiohttp.ClientSession, headers: dict) -> Optional[str]:
         """
         Получает ID pipeline для генерации изображений.
+        Использует сохраненную модель, если она есть, иначе выбирает первую доступную.
         
         Args:
             session: Сессия aiohttp
@@ -212,13 +329,30 @@ class ImageGenerator:
         Returns:
             ID pipeline или None при ошибке
         """
+        from utils.models_store import ModelsStore
+        models_store = ModelsStore()
+        saved_pipeline_id, saved_pipeline_name = models_store.get_kandinsky_model()
+        
         try:
             async with session.get(f"{self.base_url}/key/api/v1/pipelines", headers=headers) as response:
                 if response.status == 200:
                     data = await response.json()
                     if data and len(data) > 0:
+                        # Если есть сохраненная модель, ищем её в списке
+                        if saved_pipeline_id:
+                            for pipeline in data:
+                                if pipeline.get('id') == saved_pipeline_id:
+                                    self.logger.info(f"Используется сохраненная модель: {saved_pipeline_name or saved_pipeline_id}")
+                                    return saved_pipeline_id
+                            # Если сохраненная модель не найдена, используем первую доступную
+                            self.logger.warning(f"Сохраненная модель {saved_pipeline_id} не найдена. Используется первая доступная.")
+                        
+                        # Используем первую доступную модель
                         pipeline_id = data[0]['id']
-                        self.logger.info(f"Получен pipeline ID: {pipeline_id}")
+                        pipeline_name = data[0].get('name', 'Unknown')
+                        # Сохраняем выбранную модель
+                        models_store.set_kandinsky_model(pipeline_id, pipeline_name)
+                        self.logger.info(f"Получен pipeline ID: {pipeline_id} ({pipeline_name})")
                         return pipeline_id
                     else:
                         self.logger.error("Пустой ответ при получении pipeline")
@@ -226,9 +360,92 @@ class ImageGenerator:
                 else:
                     self.logger.error(f"Ошибка при получении pipeline: {response.status}")
                     return None
-        except Exception as e:
-            self.logger.error(f"Ошибка при получении pipeline ID: {e}")
+        except aiohttp.ClientConnectorError as e:
+            self.logger.error(f"Ошибка подключения к Kandinsky API при получении pipeline ID: {e}. Возможные причины: проблемы с сетью, недоступность сервера, проблемы с прокси.")
             return None
+        except aiohttp.ClientError as e:
+            self.logger.error(f"Ошибка клиента при получении pipeline ID: {e}")
+            return None
+        except asyncio.TimeoutError:
+            self.logger.error("Таймаут при получении pipeline ID")
+            return None
+        except Exception as e:
+            self.logger.error(f"Неожиданная ошибка при получении pipeline ID: {e}", exc_info=True)
+            return None
+    
+    async def set_kandinsky_model(self, model_identifier: str) -> Tuple[bool, str]:
+        """
+        Устанавливает модель Kandinsky по ID или названию.
+        
+        Args:
+            model_identifier: ID pipeline или название модели (или часть названия)
+            
+        Returns:
+            Кортеж (успех, сообщение)
+        """
+        headers = {
+            "X-Key": f"Key {self.api_key}",
+            "X-Secret": f"Secret {self.secret_key}",
+        }
+        
+        try:
+            timeout = aiohttp.ClientTimeout(
+                total=15,
+                connect=5,
+                sock_read=10
+            )
+            
+            connector = None
+            if self.proxy_url:
+                connector = aiohttp.ProxyConnector.from_url(self.proxy_url)
+            
+            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                async with session.get(f"{self.base_url}/key/api/v1/pipelines", headers=headers) as response:
+                    if response.status == 200:
+                        pipelines_data = await response.json()
+                        if isinstance(pipelines_data, list):
+                            # Сначала пытаемся найти по точному совпадению ID
+                            for pipeline in pipelines_data:
+                                if pipeline.get('id') == model_identifier:
+                                    model_name = pipeline.get('name', 'Unknown')
+                                    pipeline_id = pipeline.get('id')
+                                    from utils.models_store import ModelsStore
+                                    models_store = ModelsStore()
+                                    models_store.set_kandinsky_model(pipeline_id, model_name)
+                                    self.logger.info(f"Модель Kandinsky установлена: {model_name} (ID: {pipeline_id})")
+                                    return True, f"Модель установлена: {model_name} (ID: {pipeline_id})"
+                            
+                            # Если не найдено по ID, ищем по названию (регистронезависимо, частичное совпадение)
+                            model_identifier_lower = model_identifier.lower()
+                            matches = []
+                            for pipeline in pipelines_data:
+                                pipeline_name = pipeline.get('name', '')
+                                if model_identifier_lower in pipeline_name.lower():
+                                    matches.append(pipeline)
+                            
+                            if len(matches) == 1:
+                                # Одно совпадение - используем его
+                                pipeline = matches[0]
+                                model_name = pipeline.get('name', 'Unknown')
+                                pipeline_id = pipeline.get('id')
+                                from utils.models_store import ModelsStore
+                                models_store = ModelsStore()
+                                models_store.set_kandinsky_model(pipeline_id, model_name)
+                                self.logger.info(f"Модель Kandinsky установлена: {model_name} (ID: {pipeline_id})")
+                                return True, f"Модель установлена: {model_name} (ID: {pipeline_id})"
+                            elif len(matches) > 1:
+                                # Несколько совпадений - показываем список
+                                models_list = [f"{p.get('name', 'Unknown')} (ID: {p.get('id', 'N/A')})" for p in matches]
+                                return False, f"Найдено несколько моделей:\n" + "\n".join(models_list) + "\n\nУточните название или используйте ID"
+                            else:
+                                return False, f"Модель '{model_identifier}' не найдена. Используйте /status для просмотра доступных моделей."
+                        else:
+                            return False, "Не удалось получить список моделей"
+                    else:
+                        return False, f"Ошибка API: {response.status}"
+        except Exception as e:
+            self.logger.error(f"Ошибка при установке модели Kandinsky: {e}")
+            return False, f"Ошибка: {str(e)[:50]}"
     
     async def _start_generation(self, session: aiohttp.ClientSession, headers: dict, 
                               pipeline_id: str, prompt: str) -> Optional[str]:
@@ -279,8 +496,14 @@ class ImageGenerator:
                     error_text = await response.text()
                     self.logger.error(f"Текст ошибки: {error_text}")
                     return None
+        except aiohttp.ClientConnectorError as e:
+            self.logger.error(f"Ошибка подключения к Kandinsky API при запуске генерации: {e}. Возможные причины: проблемы с сетью, недоступность сервера, проблемы с прокси.")
+            return None
+        except aiohttp.ClientError as e:
+            self.logger.error(f"Ошибка клиента при запуске генерации: {e}")
+            return None
         except Exception as e:
-            self.logger.error(f"Ошибка при запуске генерации: {e}")
+            self.logger.error(f"Неожиданная ошибка при запуске генерации: {e}", exc_info=True)
             return None
     
     async def _wait_for_generation(self, session: aiohttp.ClientSession, headers: dict, 
@@ -346,13 +569,71 @@ class ImageGenerator:
                         self.logger.error(f"Ошибка при проверке статуса: {response.status}")
                         return None
                         
-            except Exception as e:
-                self.logger.error(f"Ошибка при проверке статуса (попытка {attempt + 1}): {e}")
+            except aiohttp.ClientConnectorError as e:
+                self.logger.error(f"Ошибка подключения к Kandinsky API при проверке статуса (попытка {attempt + 1}): {e}")
                 if attempt < max_attempts - 1:
                     await asyncio.sleep(delay)
+                    continue
+                else:
+                    return None
+            except aiohttp.ClientError as e:
+                self.logger.error(f"Ошибка клиента при проверке статуса (попытка {attempt + 1}): {e}")
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    return None
+            except asyncio.TimeoutError:
+                self.logger.warning(f"Таймаут при проверке статуса (попытка {attempt + 1})")
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    return None
+            except Exception as e:
+                self.logger.error(f"Неожиданная ошибка при проверке статуса (попытка {attempt + 1}): {e}")
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    return None
         
-        self.logger.error("Превышено максимальное количество попыток ожидания")
+        self.logger.error(f"Превышено максимальное количество попыток проверки статуса генерации ({max_attempts})")
         return None
+    
+    async def _generate_prompt(self) -> Optional[str]:
+        """
+        Генерирует промпт для Kandinsky через GigaChat или использует fallback.
+        
+        Returns:
+            Сгенерированный промпт или None при ошибке
+        """
+        # Пытаемся сгенерировать через GigaChat
+        if self.gigachat_enabled and self.gigachat_client:
+            try:
+                prompt = self.gigachat_client.generate_prompt_for_kandinsky()
+                if prompt:
+                    return prompt
+                else:
+                    self.logger.warning("GigaChat вернул пустой промпт, используем fallback")
+            except Exception as e:
+                self.logger.error(f"Ошибка при генерации промпта через GigaChat: {e}", exc_info=True)
+        
+        return None
+    
+    def _get_fallback_prompt(self) -> str:
+        """
+        Возвращает промпт из статического списка (fallback).
+        
+        Returns:
+            Промпт для генерации изображения
+        """
+        # Выбираем случайный промпт и стиль для разнообразия
+        frog_prompt = random.choice(ImageConfig.FROG_PROMPTS)
+        style = random.choice(ImageConfig.STYLES)
+        
+        # Формируем полный промпт
+        return f"{frog_prompt}, {style}, high quality, detailed, Wednesday frog meme"
     
     def get_random_caption(self) -> str:
         """
@@ -366,30 +647,99 @@ class ImageGenerator:
     def save_image_locally(self, image_data: bytes, folder: str = "data/frogs", prefix: str = "frog", max_files: int = 30) -> str:
         """
         Сохраняет байты изображения на диск.
+        При достижении лимита max_files удаляет самые старые файлы.
         
         Args:
             image_data: Содержимое изображения в байтах
             folder: Папка для сохранения
             prefix: Префикс имени файла
+            max_files: Максимальное количество файлов в папке (по умолчанию 30)
         Returns:
-            Путь к сохраненному файлу
+            Путь к сохраненному файлу или пустая строка при ошибке
         """
         try:
             path = Path(folder)
             path.mkdir(parents=True, exist_ok=True)
+            
+            # Сохраняем новый файл
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             file_path = path / f"{prefix}_{ts}.png"
             file_path.write_bytes(image_data)
+            self.logger.info(f"Изображение сохранено: {file_path.name}")
+            
             # Ограничим количество файлов в папке
+            # Получаем все PNG файлы и сортируем по времени модификации (новейшие первые)
             try:
-                files = sorted([p for p in path.glob("*.png")], key=lambda p: p.stat().st_mtime, reverse=True)
-                for old in files[max_files:]:
-                    try:
-                        old.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                all_files = list(path.glob("*.png"))
+                
+                if len(all_files) > max_files:
+                    # Сортируем по времени модификации: новейшие файлы первыми
+                    files_sorted = sorted(all_files, key=lambda p: p.stat().st_mtime, reverse=True)
+                    
+                    # Удаляем самые старые файлы (начиная с индекса max_files)
+                    files_to_delete = files_sorted[max_files:]
+                    deleted_count = 0
+                    
+                    for old_file in files_to_delete:
+                        try:
+                            # Не удаляем только что сохраненный файл (на всякий случай)
+                            if old_file != file_path:
+                                old_file.unlink(missing_ok=True)
+                                deleted_count += 1
+                                self.logger.debug(f"Удален старый файл: {old_file.name}")
+                        except Exception as e:
+                            self.logger.warning(f"Не удалось удалить файл {old_file.name}: {e}")
+                    
+                    if deleted_count > 0:
+                        self.logger.info(f"Удалено {deleted_count} старых файлов. Всего файлов: {len(all_files) - deleted_count} (лимит: {max_files})")
+                    else:
+                        self.logger.warning(f"Достигнут лимит файлов ({max_files}), но не удалось удалить старые")
+                else:
+                    self.logger.debug(f"Всего файлов в папке: {len(all_files)} (лимит: {max_files})")
+                    
+            except Exception as e:
+                self.logger.error(f"Ошибка при ограничении количества файлов: {e}")
+                # Продолжаем работу, даже если не удалось очистить старые файлы
+            
             return str(file_path)
-        except Exception:
+        except Exception as e:
+            self.logger.error(f"Ошибка при сохранении изображения: {e}")
             return ""
+    
+    def get_random_saved_image(self, folder: str = "data/frogs") -> Optional[Tuple[bytes, str]]:
+        """
+        Получает случайное изображение из сохраненных файлов.
+        
+        Args:
+            folder: Папка с сохраненными изображениями
+            
+        Returns:
+            Кортеж (изображение в байтах, случайная подпись) или None если нет сохраненных изображений
+        """
+        try:
+            path = Path(folder)
+            if not path.exists():
+                self.logger.warning(f"Папка {folder} не существует")
+                return None
+            
+            # Получаем все PNG файлы
+            image_files = list(path.glob("*.png"))
+            if not image_files:
+                self.logger.warning(f"Нет сохраненных изображений в папке {folder}")
+                return None
+            
+            # Выбираем случайный файл
+            random_file = random.choice(image_files)
+            
+            # Читаем файл
+            image_data = random_file.read_bytes()
+            
+            # Выбираем случайную подпись
+            caption = self.get_random_caption()
+            
+            self.logger.info(f"Загружено случайное изображение: {random_file.name}")
+            return image_data, caption
+            
+        except Exception as e:
+            self.logger.error(f"Ошибка при получении случайного изображения: {e}")
+            return None

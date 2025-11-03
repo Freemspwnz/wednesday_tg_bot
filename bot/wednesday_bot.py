@@ -40,8 +40,8 @@ class WednesdayBot:
         self.application = (
             Application.builder()
             .token(config.telegram_token)
-            .get_updates_connect_timeout(10.0)
-            .get_updates_read_timeout(20.0)
+            .get_updates_connect_timeout(30.0)
+            .get_updates_read_timeout(60.0)
             .build()
         )
         
@@ -87,22 +87,41 @@ class WednesdayBot:
         
         # Admin команды (регистрируем перед unknown_command!)
         self.application.add_handler(
-            CommandHandler("admin_status", self.handlers.admin_status_command)
+            CommandHandler("force_send", self.handlers.admin_force_send_command)
         )
         self.application.add_handler(
-            CommandHandler("admin_help", self.handlers.admin_help_command)
+            CommandHandler("add_chat", self.handlers.admin_add_chat_command)
         )
         self.application.add_handler(
-            CommandHandler("admin_force_send", self.handlers.admin_force_send_command)
+            CommandHandler("remove_chat", self.handlers.admin_remove_chat_command)
         )
+        
         self.application.add_handler(
-            CommandHandler("admin_add_chat", self.handlers.admin_add_chat_command)
+            CommandHandler("list_chats", self.handlers.list_chats_command)
         )
+        
         self.application.add_handler(
-            CommandHandler("admin_remove_chat", self.handlers.admin_remove_chat_command)
+            CommandHandler("set_kandinsky_model", self.handlers.set_kandinsky_model_command)
         )
+        
         self.application.add_handler(
-            CommandHandler("health", self.handlers.health_check_command)
+            CommandHandler("set_gigachat_model", self.handlers.set_gigachat_model_command)
+        )
+        
+        self.application.add_handler(
+            CommandHandler("mod", self.handlers.mod_command)
+        )
+        
+        self.application.add_handler(
+            CommandHandler("unmod", self.handlers.unmod_command)
+        )
+        
+        self.application.add_handler(
+            CommandHandler("list_mods", self.handlers.list_mods_command)
+        )
+        
+        self.application.add_handler(
+            CommandHandler("list_models", self.handlers.list_models_command)
         )
         
         # Обработчик для неизвестных команд
@@ -218,13 +237,73 @@ class WednesdayBot:
                 
                 
             else:
-                # Если генерация не удалась, отправляем сообщение об ошибке
-                await self._send_error_message("Не удалось сгенерировать изображение жабы для среды")
-                self.logger.error("Не удалось сгенерировать изображение для среды")
+                # Если генерация не удалась, отправляем сообщения об ошибке и случайное изображение
+                error_details = "Не удалось сгенерировать изображение жабы для среды. API вернул None (возможные причины: лимит API, circuit breaker, ошибка генерации)"
+                self.logger.error(error_details)
+                
+                # Отправляем детальное сообщение администратору
+                await self._send_admin_error(error_details)
+                
+                # Отправляем дружелюбные сообщения и случайные изображения во все целевые чаты
+                targets = set(self.chats.list_chat_ids() or [])
+                try:
+                    targets.add(int(self.chat_id))
+                except Exception:
+                    pass
+                
+                for target_chat in targets:
+                    try:
+                        # Проверяем, не было ли уже отправлено в этот чат в этот тайм-слот
+                        if self.dispatch_registry.is_dispatched(slot_date, slot_time, target_chat):
+                            self.logger.info(f"Пропускаем fallback отправку в {target_chat} - уже отправлено в слот {slot_date}_{slot_time}")
+                            continue
+                        
+                        # Отправляем дружелюбное сообщение
+                        await self._send_user_friendly_error(target_chat)
+                        
+                        # Отправляем случайное изображение
+                        if await self._send_fallback_image(target_chat):
+                            # Отмечаем в реестре успешную отправку
+                            self.dispatch_registry.mark_dispatched(slot_date, slot_time, target_chat)
+                        
+                    except Exception as send_error:
+                        self.logger.error(f"Ошибка при отправке fallback в чат {target_chat}: {send_error}")
                 
         except Exception as e:
-            self.logger.error(f"Ошибка при отправке жабы: {e}")
-            await self._send_error_message("Произошла ошибка при отправке жабы")
+            error_details = f"Произошла ошибка при отправке жабы: {str(e)}"
+            self.logger.error(error_details, exc_info=True)
+            
+            # Отправляем детальное сообщение администратору
+            import traceback
+            full_error = traceback.format_exc()
+            # Обрезаем трейс до последних 2000 символов (важная информация обычно в конце)
+            max_trace_length = 2000
+            if len(full_error) > max_trace_length:
+                full_error = "..." + full_error[-max_trace_length:]
+            await self._send_admin_error(f"{error_details}\n\nТрейс (последние {max_trace_length} символов):\n{full_error}")
+            
+            # Отправляем дружелюбные сообщения и случайные изображения во все целевые чаты
+            targets = set(self.chats.list_chat_ids() or [])
+            try:
+                targets.add(int(self.chat_id))
+            except Exception:
+                pass
+            
+            for target_chat in targets:
+                try:
+                    # Проверяем, не было ли уже отправлено в этот чат в этот тайм-слот
+                    if self.dispatch_registry.is_dispatched(slot_date, slot_time, target_chat):
+                        self.logger.info(f"Пропускаем fallback отправку в {target_chat} - уже отправлено в слот {slot_date}_{slot_time}")
+                        continue
+                    
+                    # Отправляем дружелюбное сообщение
+                    await self._send_user_friendly_error(target_chat)
+                    
+                    # Отправляем случайное изображение
+                    await self._send_fallback_image(target_chat)
+                    
+                except Exception as send_error:
+                    self.logger.error(f"Ошибка при отправке fallback в чат {target_chat}: {send_error}")
     
     async def _send_error_message(self, error_text: str) -> None:
         """
@@ -241,6 +320,105 @@ class WednesdayBot:
             )
         except Exception as send_error:
             self.logger.error(f"Не удалось отправить сообщение об ошибке: {send_error}")
+    
+    async def _send_user_friendly_error(self, chat_id: int, error_context: str = "генерации изображения") -> None:
+        """
+        Отправляет дружелюбное сообщение об ошибке пользователю.
+        
+        Args:
+            chat_id: ID чата для отправки
+            error_context: Контекст ошибки (для пользовательского сообщения)
+        """
+        try:
+            friendly_message = (
+                "🐸 К сожалению, не удалось сгенерировать новую картинку.\n"
+                "Но не расстраивайтесь! Вот случайная картинка из архива! 🎲"
+            )
+            await self.application.bot.send_message(
+                chat_id=chat_id,
+                text=friendly_message
+            )
+        except Exception as send_error:
+            self.logger.error(f"Не удалось отправить дружелюбное сообщение об ошибке: {send_error}")
+    
+    async def _send_admin_error(self, error_details: str) -> None:
+        """
+        Отправляет детальное сообщение об ошибке всем администраторам.
+        
+        Args:
+            error_details: Детальная информация об ошибке
+        """
+        from utils.admins_store import AdminsStore
+        admins_store = AdminsStore()
+        all_admins = admins_store.list_all_admins()
+        
+        if not all_admins:
+            self.logger.warning("Нет администраторов для отправки ошибки")
+            return
+        
+        admin_message = f"⚠️ Ошибка генерации изображения:\n\n{error_details}"
+        
+        # Разбиваем длинные сообщения на части (лимит Telegram: 4096 символов)
+        max_message_length = 4000  # Оставляем запас
+        
+        for admin_id in all_admins:
+            try:
+                if len(admin_message) > max_message_length:
+                    # Отправляем короткую версию
+                    short_message = error_details[:3000] + "\n\n⚠️ Сообщение обрезано, полный текст в логах."
+                    await self.application.bot.send_message(
+                        chat_id=admin_id,
+                        text=short_message
+                    )
+                else:
+                    await self.application.bot.send_message(
+                        chat_id=admin_id,
+                        text=admin_message
+                    )
+                self.logger.info(f"Отправлено сообщение об ошибке админу {admin_id}")
+            except Exception as send_error:
+                error_str = str(send_error)
+                # Если ошибка "Message is too long", отправляем сокращенную версию
+                if "too long" in error_str.lower():
+                    try:
+                        short_message = error_details[:2000] + "\n\n⚠️ Полное сообщение слишком длинное, смотрите логи."
+                        await self.application.bot.send_message(
+                            chat_id=admin_id,
+                            text=short_message
+                        )
+                        self.logger.info(f"Отправлено сокращенное сообщение об ошибке админу {admin_id}")
+                    except Exception as retry_error:
+                        self.logger.error(f"Не удалось отправить даже сокращенное сообщение админу {admin_id}: {retry_error}")
+                else:
+                    self.logger.error(f"Не удалось отправить сообщение об ошибке админу {admin_id}: {send_error}")
+    
+    async def _send_fallback_image(self, chat_id: int) -> bool:
+        """
+        Отправляет случайное изображение из сохраненных в случае ошибки генерации.
+        
+        Args:
+            chat_id: ID чата для отправки
+            
+        Returns:
+            True если изображение успешно отправлено, False в противном случае
+        """
+        try:
+            fallback_image = self.image_generator.get_random_saved_image()
+            if fallback_image:
+                image_data, caption = fallback_image
+                await self.application.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=image_data,
+                    caption=caption
+                )
+                self.logger.info(f"Случайное изображение отправлено в чат {chat_id} как fallback")
+                return True
+            else:
+                self.logger.warning("Нет сохраненных изображений для отправки как fallback")
+                return False
+        except Exception as e:
+            self.logger.error(f"Ошибка при отправке fallback изображения: {e}")
+            return False
     
     def setup_scheduler(self) -> None:
         """
@@ -318,8 +496,7 @@ class WednesdayBot:
                     "📅 Планировщик: включен (среда в указанное время)\n"
                     "🎨 Генератор изображений: Kandinsky API\n"
                     "📝 Логирование: включено\n\n"
-                    "🐸 Используйте команду /frog для тестирования!\n"
-                    "ℹ️ Команда /status покажет время следующей отправки"
+                    "🐸 Используйте команду /frog для генерации жабы!"
                 )
                 await self.application.bot.send_message(
                     chat_id=self.chat_id,
@@ -374,7 +551,6 @@ class WednesdayBot:
                     "• /start — информация\n"
                     "• /help — справка\n"
                     "• /frog — сгенерировать жабу сейчас\n"
-                    "• /status — статус и ближайшая отправка\n"
                 )
                 try:
                     await self.application.bot.send_message(chat_id=chat_id, text=welcome)
@@ -393,9 +569,16 @@ class WednesdayBot:
         Проверяет доступность чата для отправки сообщений.
         """
         try:
-            # Пытаемся получить информацию о чате
-            chat_info = await self.application.bot.get_chat(self.chat_id)
+            # Пытаемся получить информацию о чате с увеличенным таймаутом
+            chat_info = await asyncio.wait_for(
+                self.application.bot.get_chat(self.chat_id),
+                timeout=30.0
+            )
             self.logger.info(f"Чат доступен: {chat_info.title or chat_info.first_name}")
+        except asyncio.TimeoutError:
+            self.logger.warning(f"Таймаут при проверке доступа к чату {self.chat_id}")
+            self.logger.warning("Возможно, проблемы с сетью или Telegram API")
+            self.logger.warning("Бот будет работать, но проверка доступа к чату не выполнена")
         except Exception as e:
             self.logger.warning(f"Не удалось получить доступ к чату {self.chat_id}: {e}")
             self.logger.warning("Бот будет работать, но не сможет отправлять сообщения в указанный чат")
@@ -415,10 +598,36 @@ class WednesdayBot:
         
         self.logger.info("Останавливаю Wednesday Bot")
         
-        # Сразу устанавливаем флаг, чтобы предотвратить повторные вызовы
-        self.is_running = False
-        
         try:
+            # Отправляем сообщение об остановке ПЕРЕД установкой is_running = False
+            # Проверяем, что приложение еще работает перед отправкой
+            try:
+                if self.application and self.application.bot and hasattr(self.application.bot, 'send_message'):
+                    shutdown_message = (
+                        "🛑 Wednesday Frog Bot остановлен!\n\n"
+                        "📝 Логи сохранены в папке logs/\n"
+                        "👋 До свидания!"
+                    )
+                    # Используем более короткий таймаут для отправки
+                    await asyncio.wait_for(
+                        self.application.bot.send_message(
+                            chat_id=self.chat_id,
+                            text=shutdown_message
+                        ),
+                        timeout=5.0
+                    )
+                    self.logger.info("Сообщение об остановке отправлено")
+                else:
+                    self.logger.info("Пропущена отправка сообщения об остановке (приложение уже остановлено)")
+            except asyncio.TimeoutError:
+                self.logger.warning("Таймаут при отправке сообщения об остановке")
+            except Exception as send_error:
+                # Не логируем как ошибку, так как это нормально при остановке
+                self.logger.debug(f"Не удалось отправить сообщение об остановке (возможно, соединение уже закрыто): {send_error}")
+            
+            # Устанавливаем флаг остановки ПОСЛЕ отправки сообщения
+            self.is_running = False
+            
             # Останавливаем планировщик
             try:
                 if hasattr(self, 'scheduler_task') and self.scheduler_task:
@@ -430,28 +639,6 @@ class WednesdayBot:
                         pass
             except Exception as e:
                 self.logger.warning(f"Ошибка при остановке планировщика: {e}")
-
-            # Отправляем сообщение об остановке (с более коротким таймаутом)
-            try:
-                shutdown_message = (
-                    "🛑 Wednesday Frog Bot остановлен!\n\n"
-                    "📝 Логи сохранены в папке logs/\n"
-                    "👋 До свидания!"
-                )
-                
-                # Используем более короткий таймаут для отправки
-                await asyncio.wait_for(
-                    self.application.bot.send_message(
-                        chat_id=self.chat_id,
-                        text=shutdown_message
-                    ),
-                    timeout=5.0
-                )
-                self.logger.info("Сообщение об остановке отправлено")
-            except asyncio.TimeoutError:
-                self.logger.warning("Таймаут при отправке сообщения об остановке")
-            except Exception as send_error:
-                self.logger.warning(f"Не удалось отправить сообщение об остановке: {send_error}")
             
             # Безопасная остановка updater'а
             try:
@@ -479,13 +666,39 @@ class WednesdayBot:
             Словарь с информацией о боте
         """
         try:
-            bot_info = await self.application.bot.get_me()
+            bot_info = await asyncio.wait_for(
+                self.application.bot.get_me(),
+                timeout=30.0
+            )
             return {
                 "name": bot_info.first_name,
                 "username": bot_info.username,
                 "id": bot_info.id,
                 "is_running": self.is_running
             }
+        except asyncio.TimeoutError:
+            error_msg = "Таймаут при получении информации о боте (30 секунд). Возможные причины: проблемы с интернет-соединением, недоступность Telegram API."
+            self.logger.error(error_msg)
+            return {"error": "Timeout", "error_message": error_msg, "is_running": self.is_running}
         except Exception as e:
-            self.logger.error(f"Ошибка при получении информации о боте: {e}")
-            return {"error": str(e)}
+            error_type = type(e).__name__
+            error_str = str(e)
+            
+            # Определяем тип ошибки для более информативного сообщения
+            if "ConnectError" in error_type or "ConnectionError" in error_type or "Connection" in error_str:
+                error_msg = (
+                    f"Ошибка подключения к Telegram API при получении информации о боте.\n"
+                    f"Тип: {error_type}\n"
+                    f"Детали: {error_str[:200]}\n\n"
+                    "Возможные причины:\n"
+                    "- Проблемы с интернет-соединением\n"
+                    "- Telegram API временно недоступен\n"
+                    "- Проблемы с прокси (если используется)\n"
+                    "- Блокировка доступа на стороне провайдера\n\n"
+                    "Бот будет запущен, но некоторые функции могут быть недоступны."
+                )
+            else:
+                error_msg = f"Ошибка при получении информации о боте: {error_type} - {error_str[:200]}"
+            
+            self.logger.error(f"Ошибка при получении информации о боте: {error_type} - {error_str}")
+            return {"error": error_type, "error_message": error_msg, "is_running": self.is_running}

@@ -125,6 +125,120 @@ class Config:
             Количество попыток из переменной MAX_RETRIES или 3 по умолчанию
         """
         return int(self._get_env_var('MAX_RETRIES') or "3")
+    
+    @property
+    def gigachat_auth_url(self) -> str:
+        """
+        URL для аутентификации в GigaChat API.
+        
+        Returns:
+            URL из переменной GIGACHAT_AUTH_URL или значение по умолчанию
+        """
+        return self._get_env_var('GIGACHAT_AUTH_URL') or "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+    
+    @property
+    def gigachat_api_url(self) -> str:
+        """
+        URL для запросов к GigaChat API.
+        
+        Returns:
+            URL из переменной GIGACHAT_API_URL или значение по умолчанию
+        """
+        return self._get_env_var('GIGACHAT_API_URL') or "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
+    
+    @property
+    def gigachat_authorization_key(self) -> str:
+        """
+        Authorization key для GigaChat API (Base64 encoded).
+        
+        Returns:
+            Authorization key из переменной GIGACHAT_AUTHORIZATION_KEY
+        """
+        key = self._get_env_var('GIGACHAT_AUTHORIZATION_KEY')
+        if not key:
+            # Ленивый импорт чтобы избежать циклической зависимости
+            try:
+                from utils.logger import get_logger
+                logger = get_logger(__name__)
+                logger.warning("GIGACHAT_AUTHORIZATION_KEY не установлен. Генерация промптов через GigaChat будет недоступна.")
+            except ImportError:
+                # Если logger еще не инициализирован, просто пропускаем предупреждение
+                pass
+        return key or ""
+    
+    @property
+    def gigachat_scope(self) -> str:
+        """
+        Scope для аутентификации GigaChat.
+        
+        Returns:
+            Scope из переменной GIGACHAT_SCOPE или значение по умолчанию
+        """
+        return self._get_env_var('GIGACHAT_SCOPE') or "GIGACHAT_API_PERS"
+    
+    @property
+    def gigachat_model(self) -> str:
+        """
+        Модель GigaChat для использования.
+        
+        Returns:
+            Название модели из переменной GIGACHAT_MODEL или значение по умолчанию
+        """
+        return self._get_env_var('GIGACHAT_MODEL') or "GigaChat"
+    
+    @property
+    def gigachat_cert_path(self) -> Optional[str]:
+        """
+        Путь к файлу сертификата для GigaChat API.
+        
+        Returns:
+            Путь к файлу сертификата или None если не указан
+        """
+        cert_path = self._get_env_var('GIGACHAT_CERT_PATH')
+        if cert_path:
+            from pathlib import Path
+            cert_file = Path(cert_path)
+            if cert_file.exists():
+                return str(cert_file.absolute())
+            else:
+                # Ленивый импорт logger
+                try:
+                    from utils.logger import get_logger
+                    logger = get_logger(__name__)
+                    logger.warning(f"Файл сертификата не найден: {cert_path}")
+                except ImportError:
+                    pass
+        return None
+    
+    @property
+    def gigachat_verify_ssl(self):
+        """
+        Настройка проверки SSL сертификатов для GigaChat API.
+        
+        Returns:
+            Путь к файлу сертификата, True для стандартной проверки, или False для отключения
+            Приоритет: GIGACHAT_CERT_PATH > GIGACHAT_VERIFY_SSL
+        """
+        # Сначала проверяем путь к сертификату
+        cert_path = self.gigachat_cert_path
+        if cert_path:
+            return cert_path
+        
+        # Если сертификат не указан, проверяем флаг verify_ssl
+        verify_ssl_str = self._get_env_var('GIGACHAT_VERIFY_SSL')
+        if verify_ssl_str is None:
+            return True  # По умолчанию проверяем
+        return verify_ssl_str.lower() in ('true', '1', 'yes', 'on')
+    
+    @property
+    def admin_chat_id(self) -> Optional[str]:
+        """
+        ID администратора для доступа к админ-командам.
+        
+        Returns:
+            ID администратора из переменной ADMIN_CHAT_ID или None если не указан
+        """
+        return self._get_env_var('ADMIN_CHAT_ID')
 
 
 # Создаем глобальный экземпляр конфигурации

@@ -239,7 +239,7 @@ nohup python main.py > bot.log 2>&1 &
 ### Запуск с screen (Linux/macOS)
 
 ```bash
-screen -dmS wednesday-bot python main.pyp
+screen -dmS wednesday-bot python main.py
 # Для просмотра: screen -r wednesday-bot
 ```
 
@@ -250,15 +250,20 @@ screen -dmS wednesday-bot python main.pyp
 - `/start` — Приветствие и информация о боте
 - `/help` — Справка по командам
 - `/frog` — Сгенерировать жабу сейчас
-- `/status` — Статус бота и следующая отправка
 
 ### Админ-команды (если настроен ADMIN_CHAT_ID)
 
-- `/admin_status` — Статус генераций и активных чатов
-- `/admin_add_chat <chat_id>` — Добавить чат в рассылку
-- `/admin_remove_chat <chat_id>` — Удалить чат из рассылки
-- `/health` — Health-check всех систем
-- `/admin_force_send` — Принудительная отправка
+- `/status` — Статус бота (dry-run API, метрики, текущие модели)
+- `/force_send` — Принудительная отправка
+- `/add_chat <chat_id>` — Добавить чат в рассылку
+- `/remove_chat <chat_id>` — Удалить чат из рассылки
+- `/list_chats` — Список активных чатов
+- `/set_kandinsky_model <pipeline_id|name>` — Установить модель Kandinsky
+- `/set_gigachat_model <model_name>` — Установить модель GigaChat
+- `/list_models` — Показать доступные модели
+- `/mod <user_id>` — Выдать права админа
+- `/unmod <user_id>` — Убрать права админа
+- `/list_mods` — Список администраторов
 
 ### Добавление бота в группу/канал
 
@@ -447,9 +452,15 @@ python -c "from utils.config import config; print('API Key:', config.kandinsky_a
    - Войдите на [fusionbrain.ai](https://fusionbrain.ai)
    - Проверьте лимиты и оставшуюся квоту
 
-3. **Проверьте прокси (если используется):**
+3. **Проверьте прокси/сертификаты (если используется):**
 ```bash
 curl -x your-proxy:port https://api.fusionbrain.ai
+```
+
+4. **GigaChat SSL:**
+```bash
+# Убедитесь, что указан правильный путь к сертификату
+grep GIGACHAT_CERT_PATH .env || echo "Не указан GIGACHAT_CERT_PATH"
 ```
 
 ### Очистка данных
