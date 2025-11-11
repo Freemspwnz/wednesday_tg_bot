@@ -10,24 +10,32 @@ Wednesday Frog Bot — это полнофункциональный Telegram-б
 
 Проект следует принципам модульной архитектуры с четким разделением ответственности:
 
+### Структура проекта
+
 ```
-Application Layer (main.py)
-    ↓
-Bot Layer (bot/)
-    ├── WednesdayBot (управление жизненным циклом)
-    └── CommandHandlers (обработка команд)
-    ↓
-Services Layer (services/)
-    ├── ImageGenerator (генерация изображений)
-    └── TaskScheduler (планирование задач)
-    ↓
-Utils Layer (utils/)
-    ├── Config (конфигурация)
-    ├── Logger (логирование)
-    ├── ChatsStore (хранилище чатов)
-    ├── UsageTracker (трекинг использования)
-    ├── DispatchRegistry (антидубликат)
-    └── Metrics (метрики производительности)
+wednesday_tg_bot/
+├── main.py                # Точка входа, супервизор режимов
+├── bot/
+│   ├── wednesday_bot.py   # Основной бот (боевой режим)
+│   ├── support_bot.py     # Резервный бот (режим техработ)
+│   └── handlers.py        # Обработчики команд
+├── services/
+│   ├── image_generator.py  # Генерация изображений (Kandinsky + dry-run)
+│   ├── prompt_generator.py # Промпты через GigaChat
+│   └── scheduler.py        # Планировщик задач
+├── utils/
+│   ├── config.py           # Конфигурация и валидация
+│   ├── logger.py           # Логирование (loguru)
+│   ├── chats_store.py      # Хранилище чатов
+│   ├── usage_tracker.py    # Учёт ручных генераций и лимитов
+│   ├── dispatch_registry.py# Антидубли рассылок
+│   ├── models_store.py     # Список доступных моделей
+│   ├── admins_store.py     # Дополнительные администраторы
+│   └── metrics.py          # Метрики производительности
+├── data/                   # JSON-хранилища (чаты, usage, dispatch, metrics, models, frogs/)
+├── logs/                   # Логи с ротацией
+├── requirements.txt
+└── README.md
 ```
 
 ## Компоненты системы
@@ -44,6 +52,7 @@ Utils Layer (utils/)
 - `BotRunner` класс для управления жизненным циклом
 - Retry механизм для запуска polling
 - Безопасная обработка прерываний
+- Очищает промежуточные состояния (`pending_*`) после каждого переключения, что предотвращает повторную отправку финальных сообщений и накопление устаревших ссылок на сообщения
 
 ### 2. Основной класс бота (bot/wednesday_bot.py)
 
@@ -66,6 +75,7 @@ Utils Layer (utils/)
 - Retry механизм с exponential backoff
 - Обработка rate limits API Telegram
 - Предотвращение дублирования отправок
+- Последовательное редактирование статусного сообщения при переключении с SupportBot, исключающее дубли и учитывающее фактическую остановку/запуск
 
 ### 3. Обработчики команд (bot/handlers.py)
 
@@ -89,6 +99,8 @@ Utils Layer (utils/)
 - `/set_gigachat_model <model_name>` — смена модели GigaChat
 - `/list_models` — доступные модели (обе системы)
 - `/mod <user_id>` / `/unmod <user_id>` / `/list_mods` — управление администраторами
+- `/set_frog_limit <threshold>` — настройка глобального лимита ручных `/frog` (ограничено квотой)
+- `/set_frog_used <count>` — корректировка текущей месячной выработки `/frog`
 
 **Rate limiting:**
 - Per-user: 5 минут между запросами
@@ -218,6 +230,7 @@ Utils Layer (utils/)
 **Лимиты:**
 - Monthly quota: 100 генераций
 - Frog threshold: 70 генераций
+- Значения квоты и порога хранятся в `usage_stats.json` (секция `settings`) и обновляются при вызове админ-команд
 
 **Формат данных:**
 ```json

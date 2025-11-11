@@ -116,7 +116,25 @@ ADMINS_STORAGE=data/admins.json
 
 # ===== ПРОКСИ (опционально) =====
 
-# Если нужен прокси для доступа к API
+# Если нужен прокси для доступа к Telegram Bot API
+# Вариант 1: Прямой HTTP/HTTPS/SOCKS прокси (рекомендуется, если доступен)
+# Примеры:
+# TELEGRAM_PROXY_URL=http://user:pass@host:port
+# TELEGRAM_PROXY_URL=https://user:pass@host:port
+# TELEGRAM_PROXY_URL=socks5://127.0.0.1:1080
+TELEGRAM_PROXY_URL=
+
+# Вариант 2: VLESS через локальный прокси (Xray/V2Ray)
+# Укажите строку VLESS (для справки/логов) — напрямую не используется PTB/HTTPX
+# Пример: vless://<uuid>@host:port?encryption=none&security=reality#name
+TELEGRAM_VLESS_URL=
+# Укажите адрес локального HTTP/SOCKS прокси, который поднимает Xray/V2Ray поверх VLESS
+# Примеры:
+# TELEGRAM_VLESS_PROXY=http://127.0.0.1:8080
+# TELEGRAM_VLESS_PROXY=socks5://127.0.0.1:1080
+TELEGRAM_VLESS_PROXY=
+
+# Альтернативно можно задать системные переменные прокси для других клиентов
 # HTTPS_PROXY=http://proxy-server:port
 # HTTP_PROXY=http://proxy-server:port
 

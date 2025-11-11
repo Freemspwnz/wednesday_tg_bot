@@ -159,11 +159,18 @@ class TaskScheduler:
                 h, m = map(int, time_str.split(':'))
                 target_time = now.replace(hour=h, minute=m, second=0, microsecond=0)
                 
-                # Выполняем, если текущее время >= целевого (с точностью до минуты)
-                if now >= target_time:
-                    # Выполняем задачу
+                # Выполняем ТОЛЬКО в окне близком к слоту: [0, check_interval) секунд после слота
+                # Это предотвращает "задним числом" выполнение при рестарте
+                delta_sec = (now - target_time).total_seconds()
+                if 0 <= delta_sec < self.check_interval:
                     if 'wednesday_frog' in self.tasks:
-                        await self._run_async_task(self.tasks['wednesday_frog'])
+                        # Передаём точное время слота в задачу, если она принимает аргумент slot_time
+                        task_func = self.tasks['wednesday_frog']
+                        try:
+                            await self._run_async_task(lambda: task_func(slot_time=time_str))
+                        except TypeError:
+                            # Обратная совместимость: если функция без параметров
+                            await self._run_async_task(task_func)
                         if '_executed' not in self.tasks:
                             self.tasks['_executed'] = set()
                         self.tasks['_executed'].add(key)

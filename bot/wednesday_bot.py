@@ -6,6 +6,8 @@
 import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ChatMemberHandler
+from telegram.request import HTTPXRequest
+from telegram.error import TimedOut as _TTimedOut, NetworkError as _TNetworkError
 from typing import Optional
 
 from utils.logger import get_logger
@@ -37,11 +39,16 @@ class WednesdayBot:
         self.logger = get_logger(__name__)
         
         # Инициализируем компоненты
+        request = HTTPXRequest(
+            connection_pool_size=20,
+            pool_timeout=5.0,
+            read_timeout=20.0,
+            connect_timeout=15.0,
+        )
         self.application = (
             Application.builder()
             .token(config.telegram_token)
-            .get_updates_connect_timeout(30.0)
-            .get_updates_read_timeout(60.0)
+            .request(request)
             .build()
         )
         
@@ -52,6 +59,10 @@ class WednesdayBot:
         self.chats = ChatsStore()
         self.dispatch_registry = DispatchRegistry()
         self.metrics = Metrics()
+        # Данные для пост-старта (например, редактирование сообщения из SupportBot)
+        self.pending_startup_edit = None
+        # Флаг, чтобы избежать дублирующих сообщений об остановке
+        self._stop_message_sent = False
         
         # Создаем обработчики команд
         self.handlers = CommandHandlers(self.image_generator, self.scheduler.get_next_run)
@@ -90,10 +101,16 @@ class WednesdayBot:
             CommandHandler("force_send", self.handlers.admin_force_send_command)
         )
         self.application.add_handler(
+            CommandHandler("log", self.handlers.admin_log_command)
+        )
+        self.application.add_handler(
             CommandHandler("add_chat", self.handlers.admin_add_chat_command)
         )
         self.application.add_handler(
             CommandHandler("remove_chat", self.handlers.admin_remove_chat_command)
+        )
+        self.application.add_handler(
+            CommandHandler("stop", self.handlers.stop_command)
         )
         
         self.application.add_handler(
@@ -123,6 +140,14 @@ class WednesdayBot:
         self.application.add_handler(
             CommandHandler("list_models", self.handlers.list_models_command)
         )
+
+        # Админ: управление лимитами
+        self.application.add_handler(
+            CommandHandler("set_frog_limit", self.handlers.set_frog_limit_command)
+        )
+        self.application.add_handler(
+            CommandHandler("set_frog_used", self.handlers.set_frog_used_command)
+        )
         
         # Обработчик для неизвестных команд
         self.application.add_handler(
@@ -136,7 +161,7 @@ class WednesdayBot:
         
         self.logger.info("Обработчики команд успешно настроены")
     
-    async def send_wednesday_frog(self) -> None:
+    async def send_wednesday_frog(self, slot_time: Optional[str] = None) -> None:
         """
         Основная функция для отправки изображения жабы каждую среду.
         Генерирует изображение и отправляет его в указанный чат.
@@ -144,14 +169,57 @@ class WednesdayBot:
         from datetime import datetime
         now = datetime.now()
         slot_date = now.strftime("%Y-%m-%d")
-        slot_time = now.strftime("%H:%M")
+        # Если слот не передан планировщиком — сопоставим ближайший (<= now)
+        if slot_time is None:
+            try:
+                configured_times = list(self.scheduler.send_times or [])
+            except Exception:
+                configured_times = []
+            resolved_slot = None
+            if configured_times:
+                try:
+                    candidates = []
+                    for t in configured_times:
+                        if len(t) == 5 and t[2] == ':' and t[:2].isdigit() and t[3:].isdigit():
+                            h, m = int(t[:2]), int(t[3:])
+                            candidate_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+                            if candidate_dt <= now:
+                                candidates.append((candidate_dt, t))
+                    if candidates:
+                        candidates.sort(key=lambda x: x[0])
+                        resolved_slot = candidates[-1][1]
+                except Exception:
+                    resolved_slot = None
+            slot_time = resolved_slot or now.strftime("%H:%M")
         
         self.logger.info("Выполняю запланированную отправку жабы")
         
         try:
-            # Учет генерации для планировщика не ограничиваем порогом 70,
-            # но считаем общее потребление
-            # Генерируем изображение жабы
+            # Сначала соберём список целевых чатов
+            targets = set(self.chats.list_chat_ids() or [])
+            try:
+                targets.add(int(self.chat_id))
+            except Exception:
+                pass
+
+            # Если нет ни одного чата — просто выходим
+            if not targets:
+                self.logger.warning("Нет целевых чатов для отправки сообщения")
+                await self._send_error_message("Нет настроенных чатов для отправки")
+                return
+
+            # Проверяем, отправляли ли уже в этот слот во ВСЕ целевые чаты
+            already_dispatched_for_all = True
+            for target_chat in targets:
+                if not self.dispatch_registry.is_dispatched(slot_date, slot_time, target_chat):
+                    already_dispatched_for_all = False
+                    break
+
+            if already_dispatched_for_all:
+                self.logger.info(f"Уже отправлено ранее для всех чатов в слот {slot_date}_{slot_time}. Пропускаю генерацию.")
+                return
+
+            # Генерируем изображение жабы только если есть хотя бы один чат без отправки
             result = await self.image_generator.generate_frog_image(metrics=self.metrics)
             
             if result:
@@ -164,20 +232,6 @@ class WednesdayBot:
                         self.logger.info(f"Изображение сохранено локально: {saved_path}")
                 except Exception as e:
                     self.logger.warning(f"Не удалось сохранить изображение локально: {e}")
-
-                # Целевые чаты: сохранённые чаты + резервный конфиг чат
-                targets = set(self.chats.list_chat_ids() or [])
-                # Добавляем резервный чат из конфигурации
-                try:
-                    targets.add(int(self.chat_id))
-                except Exception:
-                    pass
-                
-                # Если нет ни одного чата, пропускаем отправку
-                if not targets:
-                    self.logger.warning("Нет целевых чатов для отправки сообщения")
-                    await self._send_error_message("Нет настроенных чатов для отправки")
-                    return
 
                 for target_chat in targets:
                     # Проверяем, не было ли уже отправлено в этот чат в этот тайм-слот
@@ -198,6 +252,10 @@ class WednesdayBot:
                             self.dispatch_registry.mark_dispatched(slot_date, slot_time, target_chat)
                             # инкрементируем счетчик после успешной отправки
                             self.usage.increment(1)
+                            try:
+                                self.metrics.increment_dispatch_success()
+                            except Exception:
+                                pass
                             self.logger.info(f"Жаба отправлена в чат {target_chat}")
                             break
                         except Exception as send_error:
@@ -223,6 +281,10 @@ class WednesdayBot:
                                 self.logger.error(f"Не удалось отправить изображение в чат {target_chat} после всех попыток")
                                 try:
                                     await self._send_error_message(f"Не удалось отправить изображение в чат {target_chat}")
+                                except Exception:
+                                    pass
+                                try:
+                                    self.metrics.increment_dispatch_failed()
                                 except Exception:
                                     pass
                             else:
@@ -257,14 +319,18 @@ class WednesdayBot:
                         if self.dispatch_registry.is_dispatched(slot_date, slot_time, target_chat):
                             self.logger.info(f"Пропускаем fallback отправку в {target_chat} - уже отправлено в слот {slot_date}_{slot_time}")
                             continue
-                        
+
                         # Отправляем дружелюбное сообщение
                         await self._send_user_friendly_error(target_chat)
-                        
+
                         # Отправляем случайное изображение
                         if await self._send_fallback_image(target_chat):
                             # Отмечаем в реестре успешную отправку
                             self.dispatch_registry.mark_dispatched(slot_date, slot_time, target_chat)
+                            try:
+                                self.metrics.increment_dispatch_success()
+                            except Exception:
+                                pass
                         
                     except Exception as send_error:
                         self.logger.error(f"Ошибка при отправке fallback в чат {target_chat}: {send_error}")
@@ -300,7 +366,11 @@ class WednesdayBot:
                     await self._send_user_friendly_error(target_chat)
                     
                     # Отправляем случайное изображение
-                    await self._send_fallback_image(target_chat)
+                    if await self._send_fallback_image(target_chat):
+                        try:
+                            self.metrics.increment_dispatch_success()
+                        except Exception:
+                            pass
                     
                 except Exception as send_error:
                     self.logger.error(f"Ошибка при отправке fallback в чат {target_chat}: {send_error}")
@@ -470,6 +540,8 @@ class WednesdayBot:
             self.application.bot_data["usage"] = self.usage
             self.application.bot_data["chats"] = self.chats
             self.application.bot_data["metrics"] = self.metrics
+            # Сохраняем ссылку на экземпляр бота для управленческих команд (/stop)
+            self.application.bot_data["bot"] = self
 
             # Ретраи запуска сети (start + polling)
             delay = 3
@@ -502,10 +574,81 @@ class WednesdayBot:
                     chat_id=self.chat_id,
                     text=startup_message
                 )
+                # Дублируем в админ-чат, если задан, избегая повтора, если CHAT_ID совпадает
+                try:
+                    from utils.admins_store import AdminsStore as _AdminsStore
+                    from utils.config import config as _cfg
+                    admin_chat_id_env = getattr(_cfg, 'admin_chat_id', None)
+                    if admin_chat_id_env:
+                        try:
+                            admin_chat_id_val = int(str(admin_chat_id_env))
+                            chat_id_val = int(str(self.chat_id)) if self.chat_id is not None else None
+                            if chat_id_val != admin_chat_id_val:
+                                await self.application.bot.send_message(
+                                    chat_id=admin_chat_id_val,
+                                    text=startup_message
+                                )
+                        except Exception:
+                            pass
+                    else:
+                        # Если ADMIN_CHAT_ID не задан, разошлем всем админам из хранилища (без дубля с CHAT_ID)
+                        try:
+                            admins = _AdminsStore().list_all_admins()
+                            for admin_id in admins:
+                                try:
+                                    chat_id_val = int(str(self.chat_id)) if self.chat_id is not None else None
+                                    if chat_id_val is not None and admin_id == chat_id_val:
+                                        continue
+                                    await self.application.bot.send_message(
+                                        chat_id=admin_id,
+                                        text=startup_message
+                                    )
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
                 self.logger.info("Сообщение о запуске отправлено")
             except Exception as send_error:
                 self.logger.warning(f"Не удалось отправить сообщение о запуске: {send_error}")
                 self.logger.info("Бот запущен, но не удалось отправить уведомление в чат")
+
+            # Если был передан статус от SupportBot — дополняем его финальным состоянием основного
+            try:
+                if isinstance(self.pending_startup_edit, dict):
+                    chat_id = self.pending_startup_edit.get("chat_id")
+                    message_id = self.pending_startup_edit.get("message_id")
+                    # Не редактируем сообщение в админском чате — оно предназначено для других чатов
+                    skip_admin_edit = False
+                    try:
+                        from utils.config import config as _cfg
+                        admin_chat_id_env = getattr(_cfg, 'admin_chat_id', None)
+                        if admin_chat_id_env:
+                            try:
+                                skip_admin_edit = int(str(admin_chat_id_env)) == int(str(chat_id))
+                            except Exception:
+                                skip_admin_edit = False
+                    except Exception:
+                        skip_admin_edit = False
+
+                    if chat_id and message_id and not skip_admin_edit:
+                        # Финальный текст после фактической остановки Support Bot и запуска основного
+                        final_text = (
+                            "🛑 Support Bot остановлен\n"
+                            "✅ Wednesday Frog Bot запущен"
+                        )
+                        await self.application.bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=final_text
+                        )
+                        self.logger.info("Основной бот подтвердил запуск в сообщение SupportBot")
+                    else:
+                        if chat_id and skip_admin_edit:
+                            self.logger.info("Пропускаю редактирование статусного сообщения в админском чате")
+            except Exception as e:
+                self.logger.warning(f"Не удалось обновить статусное сообщение SupportBot: {e}")
             
             # Запускаем планировщик в фоновой задаче
             self.scheduler_task = asyncio.create_task(self.scheduler.start())
@@ -599,33 +742,7 @@ class WednesdayBot:
         self.logger.info("Останавливаю Wednesday Bot")
         
         try:
-            # Отправляем сообщение об остановке ПЕРЕД установкой is_running = False
-            # Проверяем, что приложение еще работает перед отправкой
-            try:
-                if self.application and self.application.bot and hasattr(self.application.bot, 'send_message'):
-                    shutdown_message = (
-                        "🛑 Wednesday Frog Bot остановлен!\n\n"
-                        "📝 Логи сохранены в папке logs/\n"
-                        "👋 До свидания!"
-                    )
-                    # Используем более короткий таймаут для отправки
-                    await asyncio.wait_for(
-                        self.application.bot.send_message(
-                            chat_id=self.chat_id,
-                            text=shutdown_message
-                        ),
-                        timeout=5.0
-                    )
-                    self.logger.info("Сообщение об остановке отправлено")
-                else:
-                    self.logger.info("Пропущена отправка сообщения об остановке (приложение уже остановлено)")
-            except asyncio.TimeoutError:
-                self.logger.warning("Таймаут при отправке сообщения об остановке")
-            except Exception as send_error:
-                # Не логируем как ошибку, так как это нормально при остановке
-                self.logger.debug(f"Не удалось отправить сообщение об остановке (возможно, соединение уже закрыто): {send_error}")
-            
-            # Устанавливаем флаг остановки ПОСЛЕ отправки сообщения
+            # Устанавливаем флаг остановки
             self.is_running = False
             
             # Останавливаем планировщик
@@ -646,6 +763,72 @@ class WednesdayBot:
                     await self.application.updater.stop()
             except Exception as e:
                 self.logger.warning(f"Ошибка при остановке updater'а: {e}")
+            # Небольшая пауза, чтобы освободить соединения пула перед отправкой финальных сообщений
+            try:
+                await asyncio.sleep(0.2)
+            except Exception:
+                pass
+
+            # Отправляем сообщение об остановке в CHAT_ID после остановки polling (во избежание Pool timeout)
+            try:
+                if self.application and self.application.bot and hasattr(self.application.bot, 'send_message'):
+                    has_pending_edit = hasattr(self, 'pending_shutdown_edit') and isinstance(getattr(self, 'pending_shutdown_edit'), dict)
+                    if (not has_pending_edit) and (not self._stop_message_sent):
+                        shutdown_message = (
+                            "🛑 Wednesday Frog Bot остановлен!\n\n"
+                            "📝 Логи сохранены в папке logs/\n"
+                            "👋 До свидания!"
+                        )
+                        await asyncio.wait_for(
+                            self.application.bot.send_message(
+                                chat_id=self.chat_id,
+                                text=shutdown_message
+                            ),
+                            timeout=5.0
+                        )
+                        self.logger.info("Сообщение об остановке отправлено")
+                        self._stop_message_sent = True
+            except asyncio.TimeoutError:
+                self.logger.warning("Таймаут при отправке сообщения об остановке")
+            except Exception as send_error:
+                self.logger.debug(f"Не удалось отправить сообщение об остановке (возможно, соединение уже закрыто): {send_error}")
+            
+            # Обновляем статусное сообщение в чате-источнике: основной бот остановлен (кроме админ-чата)
+            try:
+                if hasattr(self, 'pending_shutdown_edit') and isinstance(self.pending_shutdown_edit, dict):
+                    chat_id = self.pending_shutdown_edit.get('chat_id')
+                    message_id = self.pending_shutdown_edit.get('message_id')
+                    # Не редактируем в админском чате
+                    skip_admin_edit = False
+                    try:
+                        from utils.config import config as _cfg
+                        admin_chat_id_env = getattr(_cfg, 'admin_chat_id', None)
+                        if admin_chat_id_env:
+                            try:
+                                skip_admin_edit = int(str(admin_chat_id_env)) == int(str(chat_id))
+                            except Exception:
+                                skip_admin_edit = False
+                    except Exception:
+                        skip_admin_edit = False
+
+                    if chat_id and message_id and not skip_admin_edit:
+                        await self.application.bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=(
+                                "🛑 Wednesday Frog Bot остановлен!"
+                            )
+                        )
+                        self.logger.info("Статусное сообщение обновлено: основной бот остановлен")
+                    else:
+                        if chat_id and skip_admin_edit:
+                            self.logger.info("Пропускаю редактирование статусного сообщения в админском чате (остановка основного)")
+            except Exception as e:
+                self.logger.warning(f"Не удалось обновить статусное сообщение об остановке: {e}")
+            finally:
+                # Очистим данные, чтобы не переиспользовать их при последующих переключениях
+                self.pending_shutdown_edit = None
+                self.pending_startup_edit = None
             
             # Безопасная остановка приложения
             try:
@@ -657,6 +840,56 @@ class WednesdayBot:
             
         except Exception as e:
             self.logger.error(f"Ошибка при остановке бота: {e}")
+        finally:
+            # Рассылка длинного сообщения об остановке также в админ-чат(ы), избегая дубля с CHAT_ID
+            try:
+                shutdown_message = (
+                    "🛑 Wednesday Frog Bot остановлен!\n\n"
+                    "📝 Логи сохранены в папке logs/\n"
+                    "👋 До свидания!"
+                )
+                from utils.admins_store import AdminsStore
+                from utils.config import config as _cfg
+                admin_chat_id_env = getattr(_cfg, 'admin_chat_id', None)
+                has_pending_edit = hasattr(self, 'pending_shutdown_edit') and isinstance(getattr(self, 'pending_shutdown_edit'), dict)
+                if admin_chat_id_env and (not self._stop_message_sent):
+                    try:
+                        admin_chat_id_val = int(str(admin_chat_id_env))
+                        chat_id_val = int(str(self.chat_id)) if self.chat_id is not None else None
+                        # Если админ-чат совпадает с CHAT_ID и сообщение уже отправлено в try — пропускаем
+                        if chat_id_val == admin_chat_id_val and self._stop_message_sent:
+                            # Сообщение уже отправлено в CHAT_ID, пропускаем дубль
+                            pass
+                        elif has_pending_edit or (chat_id_val != admin_chat_id_val):
+                            await self.application.bot.send_message(
+                                chat_id=admin_chat_id_val,
+                                text=shutdown_message
+                            )
+                            self._stop_message_sent = True
+                    except Exception:
+                        pass
+                else:
+                    admins = AdminsStore().list_all_admins()
+                    for admin_id in admins:
+                        try:
+                            chat_id_val = int(str(self.chat_id)) if self.chat_id is not None else None
+                            # Если был pending edit — не пропускаем даже если это тот же чат;
+                            # иначе избегаем дубля с CHAT_ID
+                            if not has_pending_edit:
+                                if chat_id_val is not None and admin_id == chat_id_val:
+                                    continue
+                            await self.application.bot.send_message(
+                                chat_id=admin_id,
+                                text=shutdown_message
+                            )
+                            self._stop_message_sent = True
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            finally:
+                # Дополнительно защитимся от повторных отправок в жизненном цикле объекта
+                self._stop_message_sent = True
     
     async def get_bot_info(self) -> dict:
         """

@@ -95,6 +95,31 @@ class Config:
             ID чата из переменной CHAT_ID
         """
         return self._get_env_var('CHAT_ID')
+
+    @property
+    def telegram_proxy_url(self) -> Optional[str]:
+        """
+        URL прокси для Telegram (HTTP/SOCKS), например:
+        http://user:pass@host:port или socks5://user:pass@host:port
+        """
+        return self._get_env_var('TELEGRAM_PROXY_URL')
+
+    @property
+    def telegram_vless_url(self) -> Optional[str]:
+        """
+        VLESS URL (не используется напрямую HTTP-клиентом; нужен локальный клиент Xray/V2Ray).
+        Пример: vless://<uuid>@host:port?encryption=none&security=reality#name
+        """
+        return self._get_env_var('TELEGRAM_VLESS_URL')
+
+    @property
+    def telegram_vless_proxy(self) -> Optional[str]:
+        """
+        Локальный прокси (HTTP/SOCKS), за которым работает VLESS-клиент.
+        Пример: http://127.0.0.1:8080 или socks5://127.0.0.1:1080
+        Если задан, будет использован как proxy_url для Telegram-запросов.
+        """
+        return self._get_env_var('TELEGRAM_VLESS_PROXY')
     
     @property
     def log_level(self) -> str:
