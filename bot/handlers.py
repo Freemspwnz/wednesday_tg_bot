@@ -47,7 +47,241 @@ class CommandHandlers:
         self._global_frog_rate_limit_max = 10  # максимум запросов в окне
         
         self.logger.info("Обработчики команд инициализированы")
+
     
+
+    async def set_frog_limit_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Admin: установить порог ручных генераций /frog (максимум 100). Использование: /set_frog_limit <threshold>"""
+        user_id = update.effective_user.id
+        if not self.admins_store.is_admin(user_id):
+            await update.message.reply_text("❌ Доступно только администратору")
+            return
+        if not context.args or len(context.args) < 1:
+            await update.message.reply_text("📝 Использование: /set_frog_limit <threshold> (1..100)")
+            return
+        try:
+            raw = int(context.args[0])
+            if raw <= 0:
+                raise ValueError
+            # Ограничим максимумом 100
+            desired = min(raw, 100)
+            usage = context.application.bot_data.get("usage")
+            if usage:
+                new_threshold = usage.set_frog_threshold(desired)
+                total, threshold, quota = usage.get_limits_info()
+                await update.message.reply_text(
+                    f"✅ Порог /frog установлен: {new_threshold} (текущее использование: {total}/{quota})"
+                )
+            else:
+                await update.message.reply_text("❌ Хранилище использования не инициализировано")
+        except ValueError:
+            await update.message.reply_text("❌ Неверный параметр. Использование: /set_frog_limit <threshold> (1..100)")
+
+    async def set_frog_used_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Admin: установить текущее значение выработки /frog за месяц. Использование: /set_frog_used <count>"""
+        user_id = update.effective_user.id
+        if not self.admins_store.is_admin(user_id):
+            await update.message.reply_text("❌ Доступно только администратору")
+            return
+        if not context.args or len(context.args) < 1:
+            await update.message.reply_text("📝 Использование: /set_frog_used <count>")
+            return
+        try:
+            raw = int(context.args[0])
+            if raw < 0:
+                raise ValueError
+            usage = context.application.bot_data.get("usage")
+            if usage:
+                # Ограничим значением квоты
+                capped = min(raw, usage.monthly_quota)
+                usage.set_month_total(capped)
+                total, threshold, quota = usage.get_limits_info()
+                await update.message.reply_text(
+                    f"✅ Текущее использование /frog: {total}/{threshold} (квота: {quota})"
+                )
+            else:
+                await update.message.reply_text("❌ Хранилище использования не инициализировано")
+        except ValueError:
+            await update.message.reply_text("❌ Неверный параметр. Использование: /set_frog_used <count>")
+    
+    async def admin_log_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Admin команда: отправить логи. Использование: /log [count] (1..10). Без аргумента — последний файл."""
+        user_id = update.effective_user.id
+        if not self.admins_store.is_admin(user_id):
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Доступно только администратору",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception:
+                pass
+            return
+
+        from pathlib import Path
+        logs_dir = Path("logs")
+        if not logs_dir.exists():
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "📭 Папка logs пуста или отсутствует",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception:
+                pass
+            return
+
+        # Парсим аргумент count
+        count = 1
+        capped_note = None
+        if context.args and len(context.args) > 0:
+            raw = context.args[0]
+            if not raw.isdigit():
+                try:
+                    await self._retry_on_connect_error(
+                        update.message.reply_text,
+                        "❌ Неверный аргумент. Используйте: /log [count], где count — число 1..10",
+                        max_retries=3,
+                        delay=2
+                    )
+                except Exception:
+                    pass
+                return
+            count = int(raw)
+            if count > 10:
+                count = 10
+                capped_note = "(ограничено максимумом 10 дней)"
+
+        # Определяем файлы по датам за count дней, учитывая .log и .log.zip
+        from datetime import datetime, timedelta
+        wanted_dates = [(datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(count)]
+        candidates = []
+        for ds in wanted_dates:
+            log_path = logs_dir / f"wednesday_bot_{ds}.log"
+            zip_path = logs_dir / f"wednesday_bot_{ds}.log.zip"
+            if log_path.exists():
+                candidates.append(log_path)
+            elif zip_path.exists():
+                candidates.append(zip_path)
+
+        # Фоллбек: если ничего не нашли по датам — возьмем самый свежий файл
+        if not candidates:
+            candidates = sorted([p for p in logs_dir.iterdir() if p.is_file()], key=lambda p: p.stat().st_mtime, reverse=True)[:1]
+
+        if not candidates:
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "📭 Нет логов для отправки",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception:
+                pass
+            return
+
+        try:
+            await self._retry_on_connect_error(
+                update.message.reply_text,
+                f"📦 Отправляю файл(ы) логов за {len(candidates)} дн. {capped_note or ''}",
+                max_retries=3,
+                delay=2
+            )
+        except Exception:
+            pass
+
+        # Отправляем в порядке от старых к новым
+        for lf in sorted(candidates, key=lambda p: p.name):
+            try:
+                with lf.open("rb") as fh:
+                    await context.bot.send_document(chat_id=update.effective_chat.id, document=fh, filename=lf.name)
+            except Exception as e:
+                self.logger.warning(f"Ошибка при отправке лога {lf}: {e}")
+        try:
+            await self._retry_on_connect_error(
+                update.message.reply_text,
+                "✅ Готово",
+                max_retries=3,
+                delay=2
+            )
+        except Exception:
+            pass
+    async def stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Admin команда: остановить бота полностью."""
+        user_id = update.effective_user.id
+        self.logger.info(f"Получена команда /stop от пользователя {user_id}")
+
+        # Проверка прав администратора
+        if not self.admins_store.is_admin(user_id):
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Доступно только администратору",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ограничении доступа после {3} попыток: {e}")
+            return
+
+        # В админ-чате НЕ отправляем короткое статусное сообщение (только полные сообщения об остановке)
+        is_admin_chat = False
+        try:
+            from utils.config import config as _cfg
+            admin_chat_id_env = getattr(_cfg, 'admin_chat_id', None)
+            if admin_chat_id_env and update.effective_chat and update.effective_chat.id is not None:
+                try:
+                    is_admin_chat = int(str(admin_chat_id_env)) == int(str(update.effective_chat.id))
+                except Exception:
+                    is_admin_chat = False
+        except Exception:
+            is_admin_chat = False
+
+        # Отправляем статус только если это НЕ админ-чат
+        status_msg = None
+        if not is_admin_chat:
+            try:
+                status_msg = await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "🛑 Останавливаю Wednesday Frog Bot...",
+                    max_retries=3,
+                    delay=2
+                )
+            except Exception:
+                status_msg = None
+
+        # Сохраняем метаданные сообщения в экземпляр основного бота (только для не-админ чатов)
+        try:
+            bot_instance = context.application.bot_data.get("bot")
+            if (not is_admin_chat) and bot_instance is not None and status_msg is not None:
+                setattr(bot_instance, "pending_shutdown_edit", {
+                    "chat_id": update.effective_chat.id,
+                    "message_id": getattr(status_msg, "message_id", None)
+                })
+        except Exception:
+            pass
+
+        # Получаем экземпляр основного бота из bot_data и останавливаем его
+        try:
+            bot_instance = context.application.bot_data.get("bot")
+            if bot_instance is not None:
+                await bot_instance.stop()
+            else:
+                # Фоллбек: попытаться аккуратно остановить приложение
+                try:
+                    if hasattr(context.application, 'updater') and context.application.updater:
+                        await context.application.updater.stop()
+                except Exception:
+                    pass
+                try:
+                    await context.application.stop()
+                except Exception:
+                    pass
+        except Exception as e:
+            self.logger.error(f"Ошибка при попытке остановить бота через /stop: {e}")
+
     async def _retry_on_connect_error(self, func, *args, max_retries=3, delay=2, **kwargs):
         """
         Выполняет функцию с повторными попытками при ошибках httpx.ConnectError.
@@ -160,6 +394,7 @@ class CommandHandlers:
                 "• /frog — сгенерировать жабу сейчас (rate limit, учитывается в лимитах)\n\n"
                 "Админ-команды:\n"
                 "• /status — расширенный статус: бот, планировщик, генерации, активные чаты, проверка API и метрики" + next_run_hint + "\n"
+                "• /log [count] — отправить логи за N дней (1..10), без аргумента — последний файл\n"
                 "• /add_chat <chat_id> — добавить чат в рассылку\n"
                 "• /remove_chat <chat_id> — удалить чат из рассылки\n"
                 "• /list_chats — список активных чатов с ID\n"
@@ -169,6 +404,9 @@ class CommandHandlers:
                 "• /mod <user_id> — предоставить админ-права пользователю\n"
                 "• /unmod <user_id> — удалить админ-права у пользователя\n"
                 "• /list_mods — список всех админов с ID\n"
+                
+                "• /set_frog_limit <threshold> — порог ручных /frog (1..100, не выше квоты)\n"
+                "• /set_frog_used <count> — установить текущее число ручных /frog за месяц\n"
                 "• /help — эта справка"
             )
             self.logger.info("Отправлена админская справка")

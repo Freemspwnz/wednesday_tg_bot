@@ -33,6 +33,7 @@ class UsageTracker:
         self.monthly_quota = monthly_quota
         self.frog_threshold = frog_threshold
         self._data: Dict[str, Any] = {}
+        self._settings: Dict[str, Any] = {}
 
         # Создаём директорию, если указана (например, data/)
         if self.storage_path.parent and str(self.storage_path.parent) not in ("", "."):
@@ -46,16 +47,50 @@ class UsageTracker:
     def _load(self) -> None:
         try:
             if self.storage_path.exists():
-                self._data = json.loads(self.storage_path.read_text(encoding="utf-8"))
+                raw = json.loads(self.storage_path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict) and "settings" in raw:
+                    # Новый формат: {"settings": {...}, "YYYY-MM": {...}}
+                    self._settings = dict(raw.get("settings") or {})
+                    # Применим настройки к рантайму (с дефолтами)
+                    self.monthly_quota = int(self._settings.get("monthly_quota", self.monthly_quota))
+                    self.frog_threshold = int(self._settings.get("frog_threshold", self.frog_threshold))
+                    # Остальные ключи — месяцы
+                    self._data = {k: v for k, v in raw.items() if k != "settings"}
+                else:
+                    # Старый формат: только месяцы
+                    self._data = raw if isinstance(raw, dict) else {}
+                    # Инициализируем settings дефолтами и сразу сохраним
+                    self._settings = {
+                        "monthly_quota": int(self.monthly_quota),
+                        "frog_threshold": int(self.frog_threshold),
+                    }
+                    self._save()
             else:
                 self._data = {}
+                # Первый запуск: установим базовые значения и сохраним файл
+                self._settings = {
+                    "monthly_quota": int(self.monthly_quota),
+                    "frog_threshold": int(self.frog_threshold),
+                }
+                self._save()
         except Exception as e:
             self._data = {}
+            if not self._settings:
+                self._settings = {
+                    "monthly_quota": int(self.monthly_quota),
+                    "frog_threshold": int(self.frog_threshold),
+                }
             self.logger.warning(f"Не удалось загрузить статистику использования: {e}")
 
     def _save(self) -> None:
         try:
-            self.storage_path.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
+            payload: Dict[str, Any] = {}
+            # Обновим settings из текущих значений
+            self._settings["monthly_quota"] = int(self.monthly_quota)
+            self._settings["frog_threshold"] = int(self.frog_threshold)
+            payload.update(self._data)
+            payload["settings"] = self._settings
+            self.storage_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
             self.logger.error(f"Не удалось сохранить статистику использования: {e}")
 
@@ -84,3 +119,28 @@ class UsageTracker:
     def get_limits_info(self, when: datetime | None = None) -> tuple[int, int, int]:
         total = self.get_month_total(when)
         return total, self.frog_threshold, self.monthly_quota
+
+    def set_month_total(self, total: int, when: datetime | None = None) -> int:
+        """
+        Устанавливает текущее значение использования за месяц в абсолютном виде.
+        Возвращает установленное значение.
+        """
+        dt = when or datetime.utcnow()
+        key = self._month_key(dt)
+        self._data[key] = {"count": int(total)}
+        self._save()
+        return int(total)
+
+    def set_frog_threshold(self, threshold: int) -> int:
+        """
+        Устанавливает порог ручных генераций (/frog) на текущий месяц.
+        Порог ограничивается диапазоном [0, monthly_quota]. Возвращает установленное значение.
+        (Значение хранится в памяти, не в файле; применяется немедленно.)
+        """
+        if threshold < 0:
+            threshold = 0
+        if threshold > self.monthly_quota:
+            threshold = self.monthly_quota
+        self.frog_threshold = int(threshold)
+        self._save()
+        return self.frog_threshold

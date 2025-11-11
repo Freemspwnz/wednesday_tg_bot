@@ -11,6 +11,7 @@ from pathlib import Path
 from utils.logger import get_logger
 from utils.config import config
 from bot.wednesday_bot import WednesdayBot
+from bot.support_bot import SupportBot
 
 
 class BotRunner:
@@ -27,10 +28,14 @@ class BotRunner:
         """Инициализация runner'а бота."""
         self.logger = get_logger(__name__)
         self.bot = None
+        self.support_bot = None
         self.shutdown_event = asyncio.Event()
         self.should_stop = False
+        self.request_start_main_event = asyncio.Event()
+        self.pending_startup_edit = None
+        self.pending_shutdown_edit = None
         self.logger.info("Bot Runner инициализирован")
-    
+
     def setup_signal_handlers(self) -> None:
         """
         Настраивает обработчики сигналов для graceful shutdown.
@@ -42,7 +47,7 @@ class BotRunner:
             signal.signal(sig, self._signal_handler)
         
         self.logger.info("Обработчики сигналов настроены")
-    
+
     def _signal_handler(self, signum=None, frame=None) -> None:
         """
         Обработчик сигналов для graceful shutdown.
@@ -71,7 +76,7 @@ class BotRunner:
         except Exception as e:
             # В случае любой ошибки в обработчике сигналов, просто выводим в консоль
             print(f"Ошибка в обработчике сигналов: {e}")
-    
+
     async def run(self) -> None:
         """
         Основной метод запуска бота.
@@ -82,66 +87,112 @@ class BotRunner:
             # Проверяем наличие необходимых файлов
             self._check_requirements()
             
-            # Создаем экземпляр бота
-            self.bot = WednesdayBot()
-            
-            # Получаем информацию о боте (не блокируем запуск при ошибке)
-            try:
-                bot_info = await self.bot.get_bot_info()
-                if "error" in bot_info:
-                    self.logger.warning(f"Не удалось получить информацию о боте: {bot_info.get('error_message', bot_info.get('error', 'Unknown error'))}")
-                    self.logger.info("Продолжаю запуск бота...")
-                else:
-                    self.logger.info(f"Информация о боте: {bot_info}")
-            except Exception as e:
-                self.logger.warning(f"Критическая ошибка при получении информации о боте: {e}. Продолжаю запуск...")
-            
-            # Настраиваем обработчики сигналов ПОСЛЕ создания асинхронного контекста
+            # Общий цикл: сначала пробуем запускать основной бот; при остановке — включаем SupportBot
             loop = asyncio.get_running_loop()
             for sig in (signal.SIGINT, signal.SIGTERM):
                 try:
                     loop.add_signal_handler(sig, self._signal_handler)
                 except (ValueError, RuntimeError, AttributeError) as e:
                     self.logger.warning(f"Не удалось установить обработчик сигнала {sig}: {e}")
-            
-            # Запускаем бота в отдельной задаче
-            bot_task = asyncio.create_task(self.bot.start())
-            
-            # Запускаем задачу отслеживания сигнала остановки
-            shutdown_task = asyncio.create_task(self._wait_for_shutdown())
-            
-            # Ждем либо завершения бота, либо получения сигнала остановки
-            done, pending = await asyncio.wait(
-                [bot_task, shutdown_task],
-                return_when=asyncio.FIRST_COMPLETED
-            )
-            
-            # Если получен сигнал остановки, останавливаем бота
-            if not bot_task.done() and (self.should_stop or self.shutdown_event.is_set()):
-                self.logger.info("Получен сигнал остановки, останавливаю бота...")
-                await self._stop_bot()
-                # Отменяем задачу бота
-                if not bot_task.done():
-                    bot_task.cancel()
-            
-            # Отменяем задачу shutdown_task, если она еще выполняется
-            if not shutdown_task.done():
-                shutdown_task.cancel()
+
+            while not self.should_stop and not self.shutdown_event.is_set():
+                # Этап 1: всегда запускаем SupportBot первым
+                self.logger.info("[Supervisor] Старт SupportBot (режим по умолчанию)")
+                self.request_start_main_event.clear()
+
+                async def request_start_main(payload: dict):
+                    self.logger.info("[Supervisor] Получен запрос запуска основного бота из SupportBot")
+                    self.pending_startup_edit = payload or None
+                    self.request_start_main_event.set()
+
+                self.support_bot = SupportBot(request_start_main=request_start_main)
+                # Если есть отложенное редактирование для статуса остановки основного — передадим SupportBot
                 try:
-                    await shutdown_task
-                except asyncio.CancelledError:
-                    pass
-            
-            # Ждем завершения bot_task
-            if not bot_task.done():
+                    if isinstance(self.pending_shutdown_edit, dict):
+                        self.support_bot.pending_shutdown_edit = self.pending_shutdown_edit
+                        self.pending_shutdown_edit = None
+                except Exception:
+                    self.pending_shutdown_edit = None
+                support_task = asyncio.create_task(self.support_bot.start())
+
+                # Ждём либо сигнал завершения процесса, либо запрос запуска основного
+                while True:
+                    if self.should_stop or self.shutdown_event.is_set():
+                        self.logger.info("[Supervisor] Сигнал завершения в режиме SupportBot — завершаем работу")
+                        await self._stop_support_bot()
+                        if not support_task.done():
+                            support_task.cancel()
+                        return
+                    if self.request_start_main_event.is_set():
+                        break
+                    await asyncio.sleep(0.1)
+
+                # Переключение: останавливаем SupportBot, запускаем основной бот
+                self.logger.info("[Supervisor] Переключение: SupportBot -> основной бот")
+                await self._stop_support_bot()
+                if not support_task.done():
+                    support_task.cancel()
+                # Дадим немного времени освободить getUpdates
+                await asyncio.sleep(5.0)
+
+                # Этап 2: запускаем основной бот
+                self.bot = WednesdayBot()
                 try:
-                    await bot_task
-                except asyncio.CancelledError:
+                    self.bot.pending_startup_edit = self.pending_startup_edit
+                except Exception:
                     pass
-                except Exception as bot_error:
-                    self.logger.warning(f"Ошибка в задаче бота: {bot_error}")
+                try:
+                    _ = await self.bot.get_bot_info()
+                except Exception:
+                    pass
+                bot_task = asyncio.create_task(self.bot.start())
+                shutdown_task = asyncio.create_task(self._wait_for_shutdown())
+
+                done, pending = await asyncio.wait([bot_task, shutdown_task], return_when=asyncio.FIRST_COMPLETED)
+
+                # Если пришёл сигнал — останавливаем основной и снова уходим в SupportBot
+                if self.should_stop or self.shutdown_event.is_set():
+                    self.logger.info("[Supervisor] Сигнал завершения при активном основном — останавливаю основной и возвращаюсь к SupportBot")
+                    # Сохраним отложенное редактирование статуса остановки
+                    try:
+                        if hasattr(self.bot, 'pending_shutdown_edit') and isinstance(self.bot.pending_shutdown_edit, dict):
+                            self.pending_shutdown_edit = self.bot.pending_shutdown_edit
+                    except Exception:
+                        pass
+                    await self._stop_bot()
+                    self.bot = None
+                    if not bot_task.done():
+                        bot_task.cancel()
+                    # Сбрасываем флаги остановки, чтобы НЕ завершать приложение и вернуться к SupportBot
+                    self.should_stop = False
+                    self.shutdown_event = asyncio.Event()
+                    # Небольшая пауза, чтобы освободить getUpdates/соединения
+                    await asyncio.sleep(5.0)
+                    # Переходим к началу while, где снова запустится SupportBot
+                    continue
+                else:
+                    # Основной завершился сам (ошибка или /stop) — возвращаемся к SupportBot
+                    self.logger.warning("[Supervisor] Основной бот остановлен. Запуск SupportBot")
+                    # Сохраним отложенное редактирование статуса остановки
+                    try:
+                        if hasattr(self.bot, 'pending_shutdown_edit') and isinstance(self.bot.pending_shutdown_edit, dict):
+                            self.pending_shutdown_edit = self.bot.pending_shutdown_edit
+                    except Exception:
+                        pass
+                    await self._stop_bot()
+                    self.bot = None
+                    try:
+                        if not bot_task.done():
+                            bot_task.cancel()
+                            await bot_task
+                    except Exception:
+                        pass
+                    await asyncio.sleep(5.0)
+                    # Сбросим сигналы перед повторным запуском SupportBot
+                    self.should_stop = False
+                    self.shutdown_event = asyncio.Event()
             
-            self.logger.info("Wednesday Frog Bot завершил работу")
+            self.logger.info("Wednesday Frog Bot (supervisor) завершил работу")
             
         except Exception as e:
             # Более подробное логирование ошибки
@@ -151,7 +202,7 @@ class BotRunner:
             self.logger.error(f"Подробности ошибки:\n{error_details}")
             await self._cleanup()
             raise
-    
+
     def _check_requirements(self) -> None:
         """
         Проверяет наличие необходимых файлов и настроек.
@@ -180,18 +231,25 @@ class BotRunner:
         except Exception as e:
             self.logger.error(f"Ошибка в конфигурации: {e}")
             sys.exit(1)
-    
+
     async def _cleanup(self) -> None:
         """
         Выполняет очистку ресурсов при завершении работы.
         """
         self.logger.info("Выполняю очистку ресурсов")
         
-        if self.bot:
+        if self.bot and getattr(self.bot, "is_running", False):
             try:
                 await self.bot.stop()
             except Exception as e:
                 self.logger.error(f"Ошибка при остановке бота: {e}")
+        self.bot = None
+        if self.support_bot and getattr(self.support_bot, "is_running", False):
+            try:
+                await self.support_bot.stop()
+            except Exception as e:
+                self.logger.error(f"Ошибка при остановке SupportBot: {e}")
+        self.support_bot = None
                 
     async def _wait_for_shutdown(self) -> None:
         """
@@ -208,6 +266,13 @@ class BotRunner:
             await self.bot.stop()
         except Exception as e:
             self.logger.error(f"Ошибка при остановке бота: {e}")
+
+    async def _stop_support_bot(self) -> None:
+        try:
+            if self.support_bot:
+                await self.support_bot.stop()
+        except Exception as e:
+            self.logger.error(f"Ошибка при остановке SupportBot: {e}")
 
 
 async def main() -> None:
