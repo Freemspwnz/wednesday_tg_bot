@@ -1,10 +1,31 @@
 import importlib
+import os
 import sys
 from types import SimpleNamespace
 from typing import Callable, Optional
 from unittest.mock import AsyncMock
 
 import pytest
+from pytest import MonkeyPatch
+
+_session_monkeypatch = MonkeyPatch()
+_session_env_defaults = {
+    "TELEGRAM_BOT_TOKEN": "session-test-token",
+    "KANDINSKY_API_KEY": "session-test-api",
+    "KANDINSKY_SECRET_KEY": "session-test-secret",
+    "CHAT_ID": "999999",
+}
+
+for key, value in _session_env_defaults.items():
+    if not os.getenv(key):
+        _session_monkeypatch.setenv(key, value)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def session_env_defaults():
+    """Устанавливает обязательные переменные окружения до импорта модулей проекта."""
+    yield
+    _session_monkeypatch.undo()
 
 
 class _InMemoryModelsStore:
