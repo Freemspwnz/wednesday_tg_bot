@@ -144,8 +144,13 @@ def reload_config():
 @pytest.fixture
 def fake_update():
     """Создает простую структуру Update с асинхронным reply_text."""
-    reply = AsyncMock()
-    message = SimpleNamespace(reply_text=reply)
+    status_message = SimpleNamespace(delete=AsyncMock())
+    reply_text = AsyncMock(return_value=status_message)
+    reply_photo = AsyncMock(return_value=SimpleNamespace(delete=AsyncMock()))
+    message = SimpleNamespace(
+        reply_text=reply_text,
+        reply_photo=reply_photo,
+    )
     user = SimpleNamespace(id=42)
     chat = SimpleNamespace(id=100500)
     return SimpleNamespace(message=message, effective_user=user, effective_chat=chat)
@@ -166,7 +171,11 @@ def fake_context():
         def __init__(self):
             self.args = []
             self.application = _App()
-            self.bot = SimpleNamespace(send_document=AsyncMock())
+            self.bot = SimpleNamespace(
+                send_document=AsyncMock(),
+                send_message=AsyncMock(),
+                send_photo=AsyncMock(),
+            )
 
     return _Context()
 

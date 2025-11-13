@@ -1,0 +1,126 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from unittest.mock import AsyncMock
+
+import pytest
+
+from services.scheduler import TaskScheduler
+
+
+def test_schedule_methods_register_tasks():
+    scheduler = TaskScheduler()
+    async def sample(): ...
+    scheduler.schedule_wednesday_task(sample)
+    scheduler.schedule_daily_task(sample, "10:30")
+    scheduler.schedule_interval_task(sample, 15)
+
+    assert "wednesday_frog" in scheduler.tasks
+    assert scheduler.tasks["daily_task"]["time_str"] == "10:30"
+    assert scheduler.tasks["interval_task"]["interval_minutes"] == 15
+
+
+@pytest.mark.asyncio
+async def test_check_wednesday_task_executes(monkeypatch):
+    scheduler = TaskScheduler()
+    scheduler.send_times = ["10:00"]
+    scheduler.wednesday = 2
+    scheduler.check_interval = 60
+    scheduler.tasks.clear()
+
+    calls = {}
+
+    async def sample_task(slot_time=None):
+        calls["slot_time"] = slot_time
+
+    scheduler.schedule_wednesday_task(sample_task)
+
+    class FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            base = datetime(2025, 1, 8, 10, 0, 30)
+            if tz:
+                return base.replace(tzinfo=tz)
+            return base
+
+    monkeypatch.setattr("services.scheduler.datetime", FakeDateTime)
+
+    await scheduler._check_wednesday_task()
+
+    assert calls["slot_time"] == "10:00"
+
+
+@pytest.mark.asyncio
+async def test_check_daily_task(monkeypatch):
+    scheduler = TaskScheduler()
+    scheduler.tasks["daily_task"] = {
+        "func": AsyncMock(),
+        "time_str": "09:00",
+        "last_run_date": None,
+    }
+
+    class FakeDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return datetime.now().replace(hour=9, minute=5, second=0, microsecond=0)
+
+    monkeypatch.setattr("services.scheduler.datetime", FakeDateTime)
+
+    await scheduler._check_daily_task()
+
+    scheduler.tasks["daily_task"]["func"].assert_awaited_once()
+    assert scheduler.tasks["daily_task"]["last_run_date"] is not None
+
+
+@pytest.mark.asyncio
+async def test_check_interval_task(monkeypatch):
+    scheduler = TaskScheduler()
+    scheduler.tasks["interval_task"] = {
+        "func": AsyncMock(),
+        "interval_minutes": 5,
+        "last_run": None,
+    }
+
+    class FakeDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return datetime(2025, 1, 1, 12, 0, 0)
+
+    monkeypatch.setattr("services.scheduler.datetime", FakeDateTime)
+
+    await scheduler._check_interval_task()
+    scheduler.tasks["interval_task"]["func"].assert_awaited_once()
+    assert scheduler.tasks["interval_task"]["last_run"] == FakeDateTime.now()
+
+
+def test_get_next_run_returns_closest_slot(monkeypatch):
+    scheduler = TaskScheduler()
+    scheduler.send_times = ["09:00", "18:00"]
+    scheduler.wednesday = 2
+    scheduler.tz = ZoneInfo("UTC")
+
+    class FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            base = datetime(2025, 1, 7, 8, 0, 0)  # Tuesday
+            if tz:
+                return base.replace(tzinfo=tz)
+            return base
+
+    monkeypatch.setattr("services.scheduler.datetime", FakeDateTime)
+
+    next_run = scheduler.get_next_run()
+    assert next_run.weekday() == scheduler.wednesday
+    assert next_run.strftime("%H:%M") == "09:00"
+
+
+def test_stop_and_clear():
+    scheduler = TaskScheduler()
+    scheduler.running = True
+    scheduler.tasks["sample"] = object()
+
+    scheduler.stop()
+    scheduler.clear_all_jobs()
+
+    assert scheduler.running is False
+    assert scheduler.get_jobs_count() == 0
+

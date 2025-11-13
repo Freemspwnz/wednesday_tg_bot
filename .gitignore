@@ -157,3 +157,7 @@ data/
 
 # Certificates
 *.pem
+
+# Coverage reports
+coverage.xml
+.coverage

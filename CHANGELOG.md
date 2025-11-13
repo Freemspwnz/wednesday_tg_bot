@@ -1,4 +1,28 @@
 # CHANGELOG
+# CHANGELOG
+## [X.X.X]
+
+### Добавлено
+- Каркас автоматических тестов:
+  - Структура `tests/` с юнит-тестами для `utils.config`, `services.prompt_generator`, `services.image_generator` и Telegram-обработчиков.
+  - `pytest.ini` с настройками запуска и добавлением корня проекта в `PYTHONPATH`.
+  - GitHub Actions workflow `.github/workflows/pytest.yml` для прогонов тестов при `push`/`pull request`.
+- Фикстуры `pytest`:
+  - Сессионная фикстура для подстановки обязательных переменных окружения, позволяющая запускать тесты без `.env`.
+  - In-memory замены `ModelsStore` и `AdminsStore`, заглушка `GigaChatClient`, моки Telegram-контекста.
+- Документация тестов `tests/README.md` с инструкциями по локальному запуску.
+- Дополнительные модульные тесты: покрытие ключевых обработчиков (`CommandHandlers`, `WednesdayBot`, `SupportBot`), а также утилит `models_store.py`, `usage_tracker.py` и планировщика задач.
+
+### Изменено
+- `tests/conftest.py` расширен дополнительными фикстурами для валидной инициализации сервисов и очистки окружения между тестами.
+- Тесты `test_config_missing_required_env`, `test_prompt_generator`, `test_image_generator` скорректированы для корректной обработки ошибок и моков.
+- Workflow CI обновлён для установки зависимостей и запуска `pytest`.
+
+### Исправлено
+- Исключены `ModuleNotFoundError` при запуске `pytest` за счёт добавления `pythonpath = .`.
+- Исправлены `AttributeError` в тестах, связанных с моками `ModelsStore`, `GigaChatClient`, `Path.write_bytes`.
+- Устранён `ValueError` при повторной инициализации `Config` в teardown благодаря восстановлению переменных окружения в тестах.
+
 ## [3.0.0] - 2025-11-11
 
 ### Добавлено
