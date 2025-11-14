@@ -1,4 +1,4 @@
-name: CI/CD Workflow
+name: CI Pipeline
 
 on:
   push:
@@ -7,41 +7,27 @@ on:
 
 jobs:
 
-  type-check:
-    uses: ./.github/workflows/setup-python.yml
+  # --- TYPE CHECKING ---
+  mypy-check:
+    uses: ./.github/workflows/mypy-check.yml
     with:
       python-version: "3.11"
-    secrets: inherit
-    steps:
-      - run: mypy .
 
-  test:
-    uses: ./.github/workflows/setup-python.yml
+  # --- PYTEST ---
+  pytest-check:
+    uses: ./.github/workflows/pytest-check.yml
     with:
       python-version: "3.11"
-    secrets: inherit
-    steps:
-      - name: Run tests with coverage + junit
-        run: |
-          pytest \
-            --cov=bot \
-            --cov=services \
-            --cov=utils \
-            --cov-report=xml \
-            --cov-report=term \
-            --junitxml=junit.xml \
-            -o junit_family=legacy
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage.xml
-          fail_ci_if_error: true
-
-      - name: Upload test results to Codecov
-        if: ${{ !cancelled() }}
-        uses: codecov/test-results-action@v1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./junit.xml
+  # В будущем можно добавить:
+  #
+  # black-check:
+  #   uses: ./.github/workflows/black-check.yml
+  #
+  # lint-check:
+  #   uses: ./.github/workflows/lint-check.yml
+  #
+  # docker-build:
+  #   uses: ./.github/workflows/docker-build.yml
