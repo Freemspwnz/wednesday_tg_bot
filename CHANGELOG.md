@@ -1,8 +1,8 @@
 # CHANGELOG
-# CHANGELOG
 ## [X.X.X]
 
 ### Добавлено
+- Автоматическая отправка результатов тестов в Codecov при push и PR.
 - Каркас автоматических тестов:
   - Структура `tests/` с юнит-тестами для `utils.config`, `services.prompt_generator`, `services.image_generator` и Telegram-обработчиков.
   - `pytest.ini` с настройками запуска и добавлением корня проекта в `PYTHONPATH`.

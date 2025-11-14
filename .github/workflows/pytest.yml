@@ -8,6 +8,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -21,13 +22,29 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Run tests with coverage
+      - name: Run tests with coverage + junit
         run: |
-          pytest --cov=bot --cov=services --cov=utils --cov-report=xml --cov-report=term
+          pytest \
+            --cov=bot \
+            --cov=services \
+            --cov=utils \
+            --cov-report=xml \
+            --cov-report=term \
+            --junitxml=junit.xml \
+            -o junit_family=legacy
 
+      # Загружаем coverage report
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.xml
           fail_ci_if_error: true
+
+      # Загружаем результаты тестов
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./junit.xml
