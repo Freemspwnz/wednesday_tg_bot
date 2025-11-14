@@ -1,9 +1,12 @@
+from typing import Any
+from pathlib import Path
+
 from utils.models_store import ModelsStore
 
 
-def test_models_store_initial_defaults(tmp_path):
+def test_models_store_initial_defaults(tmp_path: Path) -> None:
     storage = tmp_path / "models.json"
-    store = ModelsStore(storage_path=storage)
+    store = ModelsStore(storage_path=str(storage))
 
     assert store.get_gigachat_model() is None
     assert store.get_gigachat_available_models() == []
@@ -11,9 +14,9 @@ def test_models_store_initial_defaults(tmp_path):
     assert store.get_kandinsky_available_models() == []
 
 
-def test_models_store_persistence(tmp_path):
+def test_models_store_persistence(tmp_path: Path) -> None:
     storage = tmp_path / "models.json"
-    store = ModelsStore(storage_path=storage)
+    store = ModelsStore(storage_path=str(storage))
 
     store.set_gigachat_model("GigaChat-2")
     store.set_gigachat_available_models(["A", "B"])
@@ -21,7 +24,7 @@ def test_models_store_persistence(tmp_path):
     store.set_kandinsky_available_models([{"id": "pipeline-1", "name": "Model One"}])
 
     # Загружаем заново и проверяем сохраненные данные
-    reloaded = ModelsStore(storage_path=storage)
+    reloaded = ModelsStore(storage_path=str(storage))
 
     assert reloaded.get_gigachat_model() == "GigaChat-2"
     assert reloaded.get_gigachat_available_models() == ["A", "B"]
@@ -30,10 +33,11 @@ def test_models_store_persistence(tmp_path):
     assert any("Model One" in item for item in models_list)
 
 
-def test_models_store_handles_string_models(tmp_path):
+def test_models_store_handles_string_models(tmp_path: Path) -> None:
     storage = tmp_path / "models.json"
-    store = ModelsStore(storage_path=storage)
+    store = ModelsStore(storage_path=str(storage))
 
+    # Метод set_kandinsky_available_models принимает List[str]
     store.set_kandinsky_available_models(["Model X", "Model Y"])
 
     assert store.get_kandinsky_available_models() == ["Model X", "Model Y"]

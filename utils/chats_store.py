@@ -5,13 +5,14 @@
 import os
 import json
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+from loguru import logger
 
 from utils.logger import get_logger
 
 
 class ChatsStore:
-    def __init__(self, storage_path: str | None = None):
+    def __init__(self, storage_path: Optional[str] = None) -> None:
         self.logger = get_logger(__name__)
         # Разрешаем как файл, так и директорию в CHATS_STORAGE
         env_value = os.getenv("CHATS_STORAGE")
@@ -44,7 +45,7 @@ class ChatsStore:
         except Exception as e:
             self.logger.error(f"Не удалось сохранить список чатов: {e}")
 
-    def add_chat(self, chat_id: int, title: str | None = None) -> None:
+    def add_chat(self, chat_id: int, title: Optional[str] = None) -> None:
         storage = self._data.get("chats", {})
         storage[str(chat_id)] = {"title": title or ""}
         self._data["chats"] = storage

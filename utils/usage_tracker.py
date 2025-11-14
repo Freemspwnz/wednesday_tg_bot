@@ -6,7 +6,8 @@ import os
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from loguru import logger
 
 from utils.logger import get_logger
 
@@ -17,7 +18,7 @@ class UsageTracker:
     Формат хранения: { "YYYY-MM": { "count": int } }
     """
 
-    def __init__(self, storage_path: str | None = None, monthly_quota: int = 100, frog_threshold: int = 70):
+    def __init__(self, storage_path: Optional[str] = None, monthly_quota: int = 100, frog_threshold: int = 70) -> None:
         self.logger = get_logger(__name__)
         # Разрешаем как файл, так и директорию в USAGE_STORAGE
         env_value = os.getenv("USAGE_STORAGE")
@@ -98,29 +99,31 @@ class UsageTracker:
     def _month_key(dt: datetime) -> str:
         return dt.strftime("%Y-%m")
 
-    def increment(self, count: int = 1, when: datetime | None = None) -> int:
+    def increment(self, count: int = 1, when: Optional[datetime] = None) -> int:
         dt = when or datetime.utcnow()
         key = self._month_key(dt)
         month = self._data.get(key, {"count": 0})
-        month["count"] = int(month.get("count", 0)) + int(count)
+        current_count: int = int(month.get("count", 0))
+        new_count: int = current_count + int(count)
+        month["count"] = new_count
         self._data[key] = month
         self._save()
-        return month["count"]
+        return int(month["count"])
 
-    def get_month_total(self, when: datetime | None = None) -> int:
+    def get_month_total(self, when: Optional[datetime] = None) -> int:
         dt = when or datetime.utcnow()
         key = self._month_key(dt)
         return int(self._data.get(key, {}).get("count", 0))
 
-    def can_use_frog(self, when: datetime | None = None) -> bool:
+    def can_use_frog(self, when: Optional[datetime] = None) -> bool:
         total = self.get_month_total(when)
         return total < self.frog_threshold
 
-    def get_limits_info(self, when: datetime | None = None) -> tuple[int, int, int]:
+    def get_limits_info(self, when: Optional[datetime] = None) -> tuple[int, int, int]:
         total = self.get_month_total(when)
         return total, self.frog_threshold, self.monthly_quota
 
-    def set_month_total(self, total: int, when: datetime | None = None) -> int:
+    def set_month_total(self, total: int, when: Optional[datetime] = None) -> int:
         """
         Устанавливает текущее значение использования за месяц в абсолютном виде.
         Возвращает установленное значение.

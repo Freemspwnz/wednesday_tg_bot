@@ -11,11 +11,21 @@ import base64
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from utils.metrics import Metrics
+    from aiohttp.connector import BaseConnector
+    from aiohttp import ProxyConnector
+else:
+    BaseConnector = Any
+    ProxyConnector = Any
+
 from PIL import Image
 
 from utils.logger import get_logger
 from utils.config import config, ImageConfig
+from services.prompt_generator import GigaChatClient
 
 class ImageGenerator:
     """
@@ -28,42 +38,41 @@ class ImageGenerator:
     - Случайный выбор подписей
     """
     
-    def __init__(self):
+    def __init__(self) -> None:
         """Инициализация генератора изображений."""
         import os
         self.logger = get_logger(__name__)
-        self.api_key = config.kandinsky_api_key
-        self.secret_key = config.kandinsky_secret_key
-        self.base_url = "https://api-key.fusionbrain.ai"
-        self.timeout = config.generation_timeout
-        self.max_retries = config.max_retries
+        self.api_key: Optional[str] = config.kandinsky_api_key
+        self.secret_key: Optional[str] = config.kandinsky_secret_key
+        self.base_url: str = "https://api-key.fusionbrain.ai"
+        self.timeout: int = config.generation_timeout
+        self.max_retries: int = config.max_retries
         
         # Circuit breaker для API
-        self.circuit_breaker_failures = 0
-        self.circuit_breaker_threshold = 5
-        self.circuit_breaker_cooldown = 300  # 5 минут
-        self.circuit_breaker_open_until = None
+        self.circuit_breaker_failures: int = 0
+        self.circuit_breaker_threshold: int = 5
+        self.circuit_breaker_cooldown: int = 300  # 5 минут
+        self.circuit_breaker_open_until: Optional[float] = None
         
         # Промпт для генерации жабы (fallback)
-        self.frog_prompt = ImageConfig.FROG_PROMPTS
-        self.style = ImageConfig.STYLES
+        self.frog_prompt: List[str] = ImageConfig.FROG_PROMPTS
+        self.style: List[str] = ImageConfig.STYLES
         
         # Размеры изображения
-        self.width = ImageConfig.WIDTH
-        self.height = ImageConfig.HEIGHT
+        self.width: int = ImageConfig.WIDTH
+        self.height: int = ImageConfig.HEIGHT
         
         # Подписи для изображений
-        self.captions = ImageConfig.CAPTIONS
+        self.captions: List[str] = ImageConfig.CAPTIONS
         
         # Поддержка прокси
-        self.proxy_url = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+        self.proxy_url: Optional[str] = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
         
         # Инициализация GigaChat клиента для генерации промптов
-        self.gigachat_enabled = False
-        self.gigachat_client = None
+        self.gigachat_enabled: bool = False
+        self.gigachat_client: Optional[GigaChatClient] = None
         if config.gigachat_authorization_key:
             try:
-                from services.prompt_generator import GigaChatClient
                 self.gigachat_client = GigaChatClient()
                 # Проверяем подключение
                 if self.gigachat_client.test_connection():
@@ -78,7 +87,26 @@ class ImageGenerator:
         
         self.logger.info("Генератор изображений инициализирован")
     
-    async def generate_frog_image(self, metrics=None) -> Optional[Tuple[bytes, str]]:
+    def _get_auth_headers(self) -> Dict[str, str]:
+        """
+        Получает заголовки авторизации с проверкой ключей.
+        
+        Returns:
+            Словарь с заголовками авторизации
+            
+        Raises:
+            ValueError: Если ключи не установлены
+        """
+        api_key: str = self.api_key or ""
+        secret_key: str = self.secret_key or ""
+        if not api_key or not secret_key:
+            raise ValueError("API ключи Kandinsky не установлены")
+        return {
+            "X-Key": f"Key {api_key}",
+            "X-Secret": f"Secret {secret_key}",
+        }
+    
+    async def generate_frog_image(self, metrics: Optional['Metrics'] = None) -> Optional[Tuple[bytes, str]]:
         """
         Генерирует изображение жабы с помощью Kandinsky API.
         
@@ -172,12 +200,8 @@ class ImageGenerator:
         Returns:
             Изображение в байтах или None при ошибке
         """
-        headers = {
-            "X-Key": f"Key {self.api_key}",
-            "X-Secret": f"Secret {self.secret_key}",
-        }
-        
         try:
+            headers = self._get_auth_headers()
             # Granular таймауты
             timeout = aiohttp.ClientTimeout(
                 total=self.timeout,
@@ -186,9 +210,10 @@ class ImageGenerator:
             )
             
             # Настройка connector с прокси если указан
-            connector = None
+            connector: Optional[BaseConnector] = None
             if self.proxy_url:
-                connector = aiohttp.ProxyConnector.from_url(self.proxy_url)
+                # aiohttp.ProxyConnector.from_url возвращает ProxyConnector, который является подтипом BaseConnector
+                connector = aiohttp.ProxyConnector.from_url(self.proxy_url)  # type: ignore[attr-defined]
                 self.logger.info(f"Используется прокси: {self.proxy_url}")
             
             async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
@@ -233,21 +258,17 @@ class ImageGenerator:
             Кортеж (успех_проверки, сообщение_о_статусе, список_моделей, (текущий_pipeline_id, текущее_имя))
         """
         self.logger.debug(f"Начало проверки статуса Kandinsky (save_models={save_models})")
-        headers = {
-            "X-Key": f"Key {self.api_key}",
-            "X-Secret": f"Secret {self.secret_key}",
-        }
-        
         try:
+            headers = self._get_auth_headers()
             timeout = aiohttp.ClientTimeout(
                 total=15,  # Короткий таймаут для проверки
                 connect=5,
                 sock_read=10
             )
             
-            connector = None
+            connector: Optional[BaseConnector] = None
             if self.proxy_url:
-                connector = aiohttp.ProxyConnector.from_url(self.proxy_url)
+                connector = aiohttp.ProxyConnector.from_url(self.proxy_url)  # type: ignore[attr-defined]
             
             async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
                 # Проверка статуса ключа через эндпоинт pipelines (более надежный способ)
@@ -255,9 +276,9 @@ class ImageGenerator:
                 status_message = "❌ Ошибка проверки"
                 
                 # Получаем список моделей (pipelines) и одновременно проверяем доступность API
-                models_list = []
-                current_pipeline_id = None
-                current_pipeline_name = None
+                models_list: List[str] = []
+                current_pipeline_id: Optional[str] = None
+                current_pipeline_name: Optional[str] = None
                 try:
                     from utils.models_store import ModelsStore
                     models_store = ModelsStore()
@@ -276,8 +297,8 @@ class ImageGenerator:
                                     self.logger.debug(f"Сохранен список из {len(pipelines_data)} моделей Kandinsky")
                                 
                                 for pipeline in pipelines_data:
-                                    model_name = pipeline.get('name', 'Unknown')
-                                    model_id = pipeline.get('id', 'N/A')
+                                    model_name: str = str(pipeline.get('name', 'Unknown'))
+                                    model_id: str = str(pipeline.get('id', 'N/A'))
                                     is_current = " ⭐" if (current_pipeline_id and model_id == current_pipeline_id) else ""
                                     models_list.append(f"{model_name} (ID: {model_id}){is_current}")
                             else:
@@ -317,7 +338,7 @@ class ImageGenerator:
         except Exception as e:
             return False, f"❌ Ошибка подключения: {str(e)[:50]}", [], (None, None)
     
-    async def _get_pipeline_id(self, session: aiohttp.ClientSession, headers: dict) -> Optional[str]:
+    async def _get_pipeline_id(self, session: aiohttp.ClientSession, headers: Dict[str, str]) -> Optional[str]:
         """
         Получает ID pipeline для генерации изображений.
         Использует сохраненную модель, если она есть, иначе выбирает первую доступную.
@@ -348,8 +369,10 @@ class ImageGenerator:
                             self.logger.warning(f"Сохраненная модель {saved_pipeline_id} не найдена. Используется первая доступная.")
                         
                         # Используем первую доступную модель
-                        pipeline_id = data[0]['id']
-                        pipeline_name = data[0].get('name', 'Unknown')
+                        pipeline_id_raw: Any = data[0].get('id')
+                        pipeline_name_raw: Any = data[0].get('name', 'Unknown')
+                        pipeline_id: str = str(pipeline_id_raw) if pipeline_id_raw is not None else ''
+                        pipeline_name: str = str(pipeline_name_raw)
                         # Сохраняем выбранную модель
                         models_store.set_kandinsky_model(pipeline_id, pipeline_name)
                         self.logger.info(f"Получен pipeline ID: {pipeline_id} ({pipeline_name})")
@@ -383,21 +406,17 @@ class ImageGenerator:
         Returns:
             Кортеж (успех, сообщение)
         """
-        headers = {
-            "X-Key": f"Key {self.api_key}",
-            "X-Secret": f"Secret {self.secret_key}",
-        }
-        
         try:
+            headers = self._get_auth_headers()
             timeout = aiohttp.ClientTimeout(
                 total=15,
                 connect=5,
                 sock_read=10
             )
             
-            connector = None
+            connector: Optional[BaseConnector] = None
             if self.proxy_url:
-                connector = aiohttp.ProxyConnector.from_url(self.proxy_url)
+                connector = aiohttp.ProxyConnector.from_url(self.proxy_url)  # type: ignore[attr-defined]
             
             async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
                 async with session.get(f"{self.base_url}/key/api/v1/pipelines", headers=headers) as response:
@@ -405,37 +424,37 @@ class ImageGenerator:
                         pipelines_data = await response.json()
                         if isinstance(pipelines_data, list):
                             # Сначала пытаемся найти по точному совпадению ID
-                            for pipeline in pipelines_data:
-                                if pipeline.get('id') == model_identifier:
-                                    model_name = pipeline.get('name', 'Unknown')
-                                    pipeline_id = pipeline.get('id')
+                            for pipeline_item in pipelines_data:
+                                if pipeline_item.get('id') == model_identifier:
+                                    matched_model_name: str = str(pipeline_item.get('name', 'Unknown'))
+                                    matched_pipeline_id: str = str(pipeline_item.get('id', ''))
                                     from utils.models_store import ModelsStore
                                     models_store = ModelsStore()
-                                    models_store.set_kandinsky_model(pipeline_id, model_name)
-                                    self.logger.info(f"Модель Kandinsky установлена: {model_name} (ID: {pipeline_id})")
-                                    return True, f"Модель установлена: {model_name} (ID: {pipeline_id})"
+                                    models_store.set_kandinsky_model(matched_pipeline_id, matched_model_name)
+                                    self.logger.info(f"Модель Kandinsky установлена: {matched_model_name} (ID: {matched_pipeline_id})")
+                                    return True, f"Модель установлена: {matched_model_name} (ID: {matched_pipeline_id})"
                             
                             # Если не найдено по ID, ищем по названию (регистронезависимо, частичное совпадение)
                             model_identifier_lower = model_identifier.lower()
                             matches = []
-                            for pipeline in pipelines_data:
-                                pipeline_name = pipeline.get('name', '')
+                            for pipeline_item in pipelines_data:
+                                pipeline_name = pipeline_item.get('name', '')
                                 if model_identifier_lower in pipeline_name.lower():
-                                    matches.append(pipeline)
+                                    matches.append(pipeline_item)
                             
                             if len(matches) == 1:
                                 # Одно совпадение - используем его
-                                pipeline = matches[0]
-                                model_name = pipeline.get('name', 'Unknown')
-                                pipeline_id = pipeline.get('id')
+                                matched_pipeline = matches[0]
+                                selected_model_name: str = str(matched_pipeline.get('name', 'Unknown'))
+                                selected_pipeline_id: str = str(matched_pipeline.get('id', ''))
                                 from utils.models_store import ModelsStore
                                 models_store = ModelsStore()
-                                models_store.set_kandinsky_model(pipeline_id, model_name)
-                                self.logger.info(f"Модель Kandinsky установлена: {model_name} (ID: {pipeline_id})")
-                                return True, f"Модель установлена: {model_name} (ID: {pipeline_id})"
+                                models_store.set_kandinsky_model(selected_pipeline_id, selected_model_name)
+                                self.logger.info(f"Модель Kandinsky установлена: {selected_model_name} (ID: {selected_pipeline_id})")
+                                return True, f"Модель установлена: {selected_model_name} (ID: {selected_pipeline_id})"
                             elif len(matches) > 1:
                                 # Несколько совпадений - показываем список
-                                models_list = [f"{p.get('name', 'Unknown')} (ID: {p.get('id', 'N/A')})" for p in matches]
+                                models_list: List[str] = [f"{str(p.get('name', 'Unknown'))} (ID: {str(p.get('id', 'N/A'))})" for p in matches]
                                 return False, f"Найдено несколько моделей:\n" + "\n".join(models_list) + "\n\nУточните название или используйте ID"
                             else:
                                 return False, f"Модель '{model_identifier}' не найдена. Используйте /status для просмотра доступных моделей."
@@ -447,7 +466,7 @@ class ImageGenerator:
             self.logger.error(f"Ошибка при установке модели Kandinsky: {e}")
             return False, f"Ошибка: {str(e)[:50]}"
     
-    async def _start_generation(self, session: aiohttp.ClientSession, headers: dict, 
+    async def _start_generation(self, session: aiohttp.ClientSession, headers: Dict[str, str], 
                               pipeline_id: str, prompt: str) -> Optional[str]:
         """
         Запускает генерацию изображения.
@@ -483,10 +502,11 @@ class ImageGenerator:
                 # API возвращает 201 (Created) при успешном создании задачи
                 if response.status in (200, 201):
                     result = await response.json()
-                    uuid = result.get('uuid')
-                    if uuid:
-                        self.logger.info(f"Запущена генерация с UUID: {uuid}")
-                        return uuid
+                    uuid_value = result.get('uuid')
+                    if uuid_value:
+                        uuid_str: str = str(uuid_value)
+                        self.logger.info(f"Запущена генерация с UUID: {uuid_str}")
+                        return uuid_str
                     else:
                         self.logger.error("UUID не найден в ответе")
                         return None
@@ -506,7 +526,7 @@ class ImageGenerator:
             self.logger.error(f"Неожиданная ошибка при запуске генерации: {e}", exc_info=True)
             return None
     
-    async def _wait_for_generation(self, session: aiohttp.ClientSession, headers: dict, 
+    async def _wait_for_generation(self, session: aiohttp.ClientSession, headers: Dict[str, str], 
                                   uuid: str) -> Optional[bytes]:
         """
         Ожидает завершения генерации и получает результат.

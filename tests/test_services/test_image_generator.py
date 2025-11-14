@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+from typing import Any, Optional
 
 import aiohttp
 import pytest
@@ -10,31 +11,31 @@ from services.image_generator import ImageGenerator
 
 
 @pytest.mark.asyncio
-async def test_check_api_status_dry_run(monkeypatch):
+async def test_check_api_status_dry_run(monkeypatch: Any) -> None:
     """Dry-run: проверяем, что возвращается ожидаемый статус без настоящих запросов."""
 
     class DummyResponse:
-        def __init__(self, status=200, payload=None):
+        def __init__(self, status: int = 200, payload: Any = None) -> None:
             self.status = status
-            self._payload = payload or [{"id": "p1", "name": "Model One"}]
+            self._payload: Any = payload or [{"id": "p1", "name": "Model One"}]
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> 'DummyResponse':
             return self
 
-        async def __aexit__(self, exc_type, exc_val, exc_tb):
+        async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
             return False
 
-        async def json(self):
+        async def json(self) -> Any:
             return self._payload
 
     class DummySession:
-        async def __aenter__(self):
+        async def __aenter__(self) -> 'DummySession':
             return self
 
-        async def __aexit__(self, exc_type, exc_val, exc_tb):
+        async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
             return False
 
-        def get(self, *args, **kwargs):
+        def get(self, *args: Any, **kwargs: Any) -> DummyResponse:
             return DummyResponse()
 
     monkeypatch.setattr(aiohttp, "ClientSession", lambda *args, **kwargs: DummySession())
@@ -48,7 +49,7 @@ async def test_check_api_status_dry_run(monkeypatch):
     assert current == (None, None)
 
 
-def test_save_image_locally_success(tmp_path):
+def test_save_image_locally_success(tmp_path: Path) -> None:
     generator = ImageGenerator()
     data = b"fake-image"
 
@@ -60,11 +61,11 @@ def test_save_image_locally_success(tmp_path):
     assert saved_path.read_bytes() == data
 
 
-def test_save_image_locally_handles_error(monkeypatch):
+def test_save_image_locally_handles_error(monkeypatch: Any) -> None:
     generator = ImageGenerator()
     target_folder = "/tmp/forbidden"
 
-    def fail_write_bytes(self, data):
+    def fail_write_bytes(self: Any, data: bytes) -> None:
         raise OSError("write error")
 
     monkeypatch.setattr("services.image_generator.Path.write_bytes", fail_write_bytes, raising=False)
@@ -73,19 +74,19 @@ def test_save_image_locally_handles_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_generate_frog_image_success(monkeypatch):
+async def test_generate_frog_image_success(monkeypatch: Any) -> None:
     generator = ImageGenerator()
     generator.gigachat_enabled = False
 
-    async def fake_generate_prompt():
+    async def fake_generate_prompt() -> str:
         return "frog prompt"
 
-    async def fake_generate_image(prompt):
+    async def fake_generate_image(prompt: str) -> bytes:
         return b"img"
 
-    generator._generate_prompt = AsyncMock(side_effect=fake_generate_prompt)  # type: ignore
-    generator._get_fallback_prompt = MagicMock(return_value="fallback prompt")  # type: ignore
-    generator._generate_image = AsyncMock(side_effect=fake_generate_image)  # type: ignore
+    monkeypatch.setattr(generator, "_generate_prompt", AsyncMock(side_effect=fake_generate_prompt))
+    monkeypatch.setattr(generator, "_get_fallback_prompt", MagicMock(return_value="fallback prompt"))
+    monkeypatch.setattr(generator, "_generate_image", AsyncMock(side_effect=fake_generate_image))
 
     result = await generator.generate_frog_image()
 
@@ -96,13 +97,12 @@ async def test_generate_frog_image_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_generate_frog_image_network_error(monkeypatch):
+async def test_generate_frog_image_network_error(monkeypatch: Any) -> None:
     generator = ImageGenerator()
     generator.gigachat_enabled = False
 
-    generator._generate_prompt = AsyncMock(return_value="frog prompt")  # type: ignore
-    generator._generate_image = AsyncMock(side_effect=Exception("network"))  # type: ignore
-    generator.max_retries = 1
+    monkeypatch.setattr(generator, "_generate_prompt", AsyncMock(return_value="frog prompt"))
+    monkeypatch.setattr(generator, "_generate_image", AsyncMock(side_effect=Exception("network")))
 
     result = await generator.generate_frog_image()
 

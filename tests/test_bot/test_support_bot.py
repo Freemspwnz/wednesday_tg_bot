@@ -1,36 +1,37 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from typing import Any
 
 import pytest
 
 
 @pytest.fixture
-def support_bot(monkeypatch):
+def support_bot(monkeypatch: Any) -> Any:
     from bot import support_bot as sb_module
 
     class DummyApplication:
-        def __init__(self):
-            self.added_handlers = []
+        def __init__(self) -> None:
+            self.added_handlers: list[Any] = []
             self.bot = SimpleNamespace(send_message=AsyncMock(), edit_message_text=AsyncMock())
-            self.bot_data = {}
+            self.bot_data: dict[str, Any] = {}
             self.updater = SimpleNamespace(stop=AsyncMock(), start_polling=AsyncMock())
 
-        def add_handler(self, handler):
+        def add_handler(self, handler: Any) -> None:
             self.added_handlers.append(handler)
 
-    def builder_factory():
+    def builder_factory() -> Any:
         app_instance = DummyApplication()
 
         class Builder:
-            def token(self, token):
+            def token(self, token: str) -> 'Builder':
                 self._token = token
                 return self
 
-            def request(self, request):
+            def request(self, request: Any) -> 'Builder':
                 self._request = request
                 return self
 
-            def build(self):
+            def build(self) -> DummyApplication:
                 return app_instance
 
         return Builder()
@@ -39,22 +40,22 @@ def support_bot(monkeypatch):
     monkeypatch.setattr(sb_module, "HTTPXRequest", lambda **kwargs: SimpleNamespace(**kwargs))
 
     class DummyAdminsStore:
-        def __init__(self):
-            self.admins = {1}
+        def __init__(self) -> None:
+            self.admins: set[int] = {1}
 
-        def is_admin(self, user_id):
+        def is_admin(self, user_id: int) -> bool:
             return user_id in self.admins
 
-        def list_all_admins(self):
+        def list_all_admins(self) -> list[int]:
             return list(self.admins)
 
     class DummyCommandHandler:
-        def __init__(self, command, callback):
+        def __init__(self, command: Any, callback: Any) -> None:
             self.command = command
             self.callback = callback
 
     class DummyMessageHandler:
-        def __init__(self, command_filter, callback):
+        def __init__(self, command_filter: Any, callback: Any) -> None:
             self.command_filter = command_filter
             self.callback = callback
 
@@ -67,7 +68,7 @@ def support_bot(monkeypatch):
     return bot
 
 
-def _make_update(user_id=1, chat_id=10, text="/cmd"):
+def _make_update(user_id: int = 1, chat_id: int = 10, text: str = "/cmd") -> Any:
     message = SimpleNamespace(
         reply_text=AsyncMock(),
         text=text,
@@ -79,20 +80,20 @@ def _make_update(user_id=1, chat_id=10, text="/cmd"):
     )
 
 
-def _make_context(args=None):
+def _make_context(args: Any = None) -> Any:
     return SimpleNamespace(
         args=args or [],
         bot=SimpleNamespace(send_document=AsyncMock()),
     )
 
 
-def test_support_bot_setup_handlers(support_bot):
+def test_support_bot_setup_handlers(support_bot: Any) -> None:
     support_bot.setup_handlers()
     assert len(support_bot.application.added_handlers) == 4
 
 
 @pytest.mark.asyncio
-async def test_maintenance_message_replies(support_bot):
+async def test_maintenance_message_replies(support_bot: Any) -> None:
     update = _make_update()
     context = SimpleNamespace()
 
@@ -105,7 +106,7 @@ async def test_maintenance_message_replies(support_bot):
 
 
 @pytest.mark.asyncio
-async def test_log_command_non_admin(support_bot):
+async def test_log_command_non_admin(support_bot: Any) -> None:
     support_bot.admins.admins = set()  # нет админов
     update = _make_update(user_id=2)
     context = _make_context()
@@ -119,15 +120,15 @@ async def test_log_command_non_admin(support_bot):
 
 
 @pytest.mark.asyncio
-async def test_log_command_no_logs_directory(monkeypatch, support_bot):
+async def test_log_command_no_logs_directory(monkeypatch: Any, support_bot: Any) -> None:
     update = _make_update(user_id=1)
     context = _make_context()
 
     class DummyPath:
-        def __init__(self, *_args, **_kwargs):
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
             pass
 
-        def exists(self):
+        def exists(self) -> bool:
             return False
 
     monkeypatch.setattr("bot.support_bot.Path", DummyPath)

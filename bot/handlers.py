@@ -5,13 +5,15 @@
 
 from telegram import Update
 from telegram.ext import ContextTypes
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict, Any, Tuple, List
 from datetime import datetime
 import asyncio
 import httpx
+from loguru import logger
 
 from utils.logger import get_logger
 from services.image_generator import ImageGenerator
+from utils.admins_store import AdminsStore
 
 
 class CommandHandlers:
@@ -25,26 +27,26 @@ class CommandHandlers:
     - Обработку команды /status (статус бота)
     """
     
-    def __init__(self, image_generator: ImageGenerator, next_run_provider: Optional[Callable[[], Optional[datetime]]] = None):
+    def __init__(self, image_generator: ImageGenerator, next_run_provider: Optional[Callable[[], Optional[datetime]]] = None) -> None:
         """
         Инициализация обработчиков команд.
         
         Args:
             image_generator: Экземпляр генератора изображений
+            next_run_provider: Функция для получения времени следующего запуска
         """
         self.logger = get_logger(__name__)
-        self.image_generator = image_generator
-        self.next_run_provider = next_run_provider
+        self.image_generator: ImageGenerator = image_generator
+        self.next_run_provider: Optional[Callable[[], Optional[datetime]]] = next_run_provider
         # Инициализируем хранилище админов
-        from utils.admins_store import AdminsStore
-        self.admins_store = AdminsStore()
+        self.admins_store: AdminsStore = AdminsStore()
         
         # Rate limiting для /frog
-        self._frog_rate_limit = {}  # {user_id: last_call_timestamp}
-        self._frog_rate_limit_minutes = 5  # минимальный интервал в минутах
-        self._global_frog_rate_limit = {}  # {timestamp: count}
-        self._global_frog_rate_limit_window = 60  # окно в секундах
-        self._global_frog_rate_limit_max = 10  # максимум запросов в окне
+        self._frog_rate_limit: Dict[int, float] = {}  # {user_id: last_call_timestamp}
+        self._frog_rate_limit_minutes: int = 5  # минимальный интервал в минутах
+        self._global_frog_rate_limit: Dict[float, int] = {}  # {timestamp: count}
+        self._global_frog_rate_limit_window: int = 60  # окно в секундах
+        self._global_frog_rate_limit_max: int = 10  # максимум запросов в окне
         
         self.logger.info("Обработчики команд инициализированы")
 
@@ -52,6 +54,9 @@ class CommandHandlers:
 
     async def set_frog_limit_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin: установить порог ручных генераций /frog (максимум 100). Использование: /set_frog_limit <threshold>"""
+        if not update.message or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
         if not self.admins_store.is_admin(user_id):
             await update.message.reply_text("❌ Доступно только администратору")
@@ -79,6 +84,9 @@ class CommandHandlers:
 
     async def set_frog_used_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin: установить текущее значение выработки /frog за месяц. Использование: /set_frog_used <count>"""
+        if not update.message or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
         if not self.admins_store.is_admin(user_id):
             await update.message.reply_text("❌ Доступно только администратору")
@@ -106,6 +114,9 @@ class CommandHandlers:
     
     async def admin_log_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: отправить логи. Использование: /log [count] (1..10). Без аргумента — последний файл."""
+        if not update.message or not update.effective_user or not update.effective_chat:
+            return
+        
         user_id = update.effective_user.id
         if not self.admins_store.is_admin(user_id):
             try:
@@ -156,8 +167,9 @@ class CommandHandlers:
 
         # Определяем файлы по датам за count дней, учитывая .log и .log.zip
         from datetime import datetime, timedelta
+        from pathlib import Path as PathLib
         wanted_dates = [(datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(count)]
-        candidates = []
+        candidates: List[PathLib] = []
         for ds in wanted_dates:
             log_path = logs_dir / f"wednesday_bot_{ds}.log"
             zip_path = logs_dir / f"wednesday_bot_{ds}.log.zip"
@@ -210,6 +222,9 @@ class CommandHandlers:
             pass
     async def stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: остановить бота полностью."""
+        if not update.message or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
         self.logger.info(f"Получена команда /stop от пользователя {user_id}")
 
@@ -255,7 +270,7 @@ class CommandHandlers:
         # Сохраняем метаданные сообщения в экземпляр основного бота (только для не-админ чатов)
         try:
             bot_instance = context.application.bot_data.get("bot")
-            if (not is_admin_chat) and bot_instance is not None and status_msg is not None:
+            if (not is_admin_chat) and bot_instance is not None and status_msg is not None and update.effective_chat:
                 setattr(bot_instance, "pending_shutdown_edit", {
                     "chat_id": update.effective_chat.id,
                     "message_id": getattr(status_msg, "message_id", None)
@@ -282,7 +297,7 @@ class CommandHandlers:
         except Exception as e:
             self.logger.error(f"Ошибка при попытке остановить бота через /stop: {e}")
 
-    async def _retry_on_connect_error(self, func, *args, max_retries=3, delay=2, **kwargs):
+    async def _retry_on_connect_error(self, func: Callable[..., Any], *args: Any, max_retries: int = 3, delay: float = 2.0, **kwargs: Any) -> Any:
         """
         Выполняет функцию с повторными попытками при ошибках httpx.ConnectError.
         
@@ -299,7 +314,7 @@ class CommandHandlers:
         Raises:
             Последняя ошибка, если все попытки исчерпаны
         """
-        last_error = None
+        last_error: Optional[Exception] = None
         for attempt in range(1, max_retries + 1):
             try:
                 return await func(*args, **kwargs)
@@ -316,7 +331,10 @@ class CommandHandlers:
                 raise
         
         # Если дошли сюда, все попытки исчерпаны
-        raise last_error
+        if last_error is not None:
+            raise last_error
+        # Если last_error None (не должно случиться, но для безопасности)
+        raise RuntimeError("Все попытки исчерпаны, но ошибка не была сохранена")
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
@@ -327,6 +345,9 @@ class CommandHandlers:
             update: Объект обновления Telegram
             context: Контекст бота
         """
+        if not update.message or not update.effective_user:
+            return
+        
         self.logger.info(f"Получена команда /start от пользователя {update.effective_user.id}")
         
         next_run_info = ""
@@ -369,6 +390,9 @@ class CommandHandlers:
             update: Объект обновления Telegram
             context: Контекст бота
         """
+        if not update.message or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
         self.logger.info(f"Получена команда /help от пользователя {user_id}")
         
@@ -456,6 +480,9 @@ class CommandHandlers:
             update: Объект обновления Telegram
             context: Контекст бота
         """
+        if not update.message or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
         self.logger.info(f"Получена команда /frog от пользователя {user_id}")
         
@@ -560,7 +587,11 @@ class CommandHandlers:
                     usage.increment(1)
                 
                 # Удаляем статусное сообщение
-                await status_message.delete()
+                if status_message:
+                    try:
+                        await status_message.delete()
+                    except Exception:
+                        pass
                 
                 self.logger.info(f"Изображение жабы успешно отправлено пользователю {user_id}")
                 
@@ -570,10 +601,11 @@ class CommandHandlers:
                 self.logger.error(error_details)
                 
                 # Удаляем статусное сообщение
-                try:
-                    await status_message.delete()
-                except Exception:
-                    pass
+                if status_message:
+                    try:
+                        await status_message.delete()
+                    except Exception:
+                        pass
                 
                 # Отправляем дружелюбное сообщение пользователю
                 friendly_message = (
@@ -752,6 +784,9 @@ class CommandHandlers:
             update: Объект обновления Telegram
             context: Контекст бота
         """
+        if not update.message or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
         self.logger.info(f"Получена команда /status от пользователя {user_id}")
         
@@ -785,23 +820,26 @@ class CommandHandlers:
                     pass
 
             # Проверяем API без генерации (dry-run)
-            api_status = "⏳ Проверка..."
-            api_models = []
-            current_kandinsky = (None, None)
+            api_status: str = "⏳ Проверка..."
+            api_models: List[str] = []
+            current_kandinsky: Tuple[Optional[str], Optional[str]] = (None, None)
+            api_ok: bool = False
             try:
                 api_ok, api_status, api_models, current_kandinsky = await self.image_generator.check_api_status()
                 if not api_ok:
                     self.logger.warning(f"Проверка API Kandinsky не прошла: {api_status}")
             except Exception as e:
+                api_ok = False
                 api_status = f"❌ Ошибка: {str(e)[:50]}"
                 self.logger.error(f"Ошибка при проверке API: {e}", exc_info=True)
             
             # Проверяем GigaChat API без траты токенов
-            gigachat_status = "N/A"
-            gigachat_models = []
-            current_gigachat = None
+            gigachat_status: str = "N/A"
+            gigachat_models: List[str] = []
+            current_gigachat: Optional[str] = None
             if self.image_generator.gigachat_client:
                 try:
+                    gigachat_ok: bool
                     gigachat_ok, gigachat_status = self.image_generator.gigachat_client.check_api_status()
                     if not gigachat_ok:
                         self.logger.warning(f"Проверка API GigaChat не прошла: {gigachat_status}")
@@ -826,7 +864,7 @@ class CommandHandlers:
 
             # Информация об активных чатах
             chats = context.application.bot_data.get("chats")
-            chats_info = "N/A"
+            chats_info: str | int = "N/A"
             if chats:
                 chats_info = len(chats.list_chat_ids())
 
@@ -922,6 +960,9 @@ class CommandHandlers:
             update: Объект обновления Telegram
             context: Контекст бота
         """
+        if not update.message or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
         self.logger.info(f"Получена неизвестная команда от пользователя {user_id}")
         
@@ -947,6 +988,9 @@ class CommandHandlers:
     
     async def admin_force_send_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: принудительная отправка в чат."""
+        if not update.message or not update.effective_user:
+            return
+        
         if not self.admins_store.is_admin(update.effective_user.id):
             try:
                 await self._retry_on_connect_error(
@@ -978,6 +1022,9 @@ class CommandHandlers:
     
     async def admin_add_chat_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: добавить чат в рассылку."""
+        if not update.message or not update.effective_user:
+            return
+        
         if not self.admins_store.is_admin(update.effective_user.id):
             try:
                 await self._retry_on_connect_error(
@@ -1029,6 +1076,9 @@ class CommandHandlers:
     
     async def admin_remove_chat_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: удалить чат из рассылки."""
+        if not update.message or not update.effective_user:
+            return
+        
         if not self.admins_store.is_admin(update.effective_user.id):
             await update.message.reply_text("❌ Доступно только администратору")
             return
@@ -1048,6 +1098,9 @@ class CommandHandlers:
     
     async def list_chats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: список активных чатов с ID."""
+        if not update.message or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
         self.logger.info(f"Получена команда /list_chats от пользователя {user_id}")
         
@@ -1116,6 +1169,9 @@ class CommandHandlers:
     
     async def set_kandinsky_model_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: установить модель Kandinsky."""
+        if not update.message or not update.effective_user:
+            return
+        
         if not self.admins_store.is_admin(update.effective_user.id):
             try:
                 await self._retry_on_connect_error(
@@ -1176,6 +1232,9 @@ class CommandHandlers:
     
     async def set_gigachat_model_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: установить модель GigaChat."""
+        if not update.message or not update.effective_user:
+            return
+        
         if not self.admins_store.is_admin(update.effective_user.id):
             try:
                 await self._retry_on_connect_error(
@@ -1235,6 +1294,9 @@ class CommandHandlers:
     
     async def mod_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: добавить администратора."""
+        if not update.message or not update.effective_user:
+            return
+        
         if not self.admins_store.is_admin(update.effective_user.id):
             try:
                 await self._retry_on_connect_error(
@@ -1289,6 +1351,9 @@ class CommandHandlers:
     
     async def unmod_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: удалить администратора."""
+        if not update.message or not update.effective_user:
+            return
+        
         if not self.admins_store.is_admin(update.effective_user.id):
             try:
                 await self._retry_on_connect_error(
@@ -1358,6 +1423,9 @@ class CommandHandlers:
     
     async def list_mods_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: список всех админов с ID."""
+        if not update.message or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
         self.logger.info(f"Получена команда /list_mods от пользователя {user_id}")
         
@@ -1409,6 +1477,9 @@ class CommandHandlers:
     
     async def list_models_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: список всех доступных моделей Kandinsky и GigaChat."""
+        if not update.message or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
         self.logger.info(f"Получена команда /list_models от пользователя {user_id}")
         

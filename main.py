@@ -7,6 +7,8 @@ import asyncio
 import signal
 import sys
 from pathlib import Path
+from typing import Optional, Dict, Any
+from loguru import logger
 
 from utils.logger import get_logger
 from utils.config import config
@@ -24,16 +26,16 @@ class BotRunner:
     - Логирование состояния приложения
     """
     
-    def __init__(self):
+    def __init__(self) -> None:
         """Инициализация runner'а бота."""
         self.logger = get_logger(__name__)
-        self.bot = None
-        self.support_bot = None
-        self.shutdown_event = asyncio.Event()
-        self.should_stop = False
-        self.request_start_main_event = asyncio.Event()
-        self.pending_startup_edit = None
-        self.pending_shutdown_edit = None
+        self.bot: Optional[WednesdayBot] = None
+        self.support_bot: Optional[SupportBot] = None
+        self.shutdown_event: asyncio.Event = asyncio.Event()
+        self.should_stop: bool = False
+        self.request_start_main_event: asyncio.Event = asyncio.Event()
+        self.pending_startup_edit: Optional[Dict[str, Any]] = None
+        self.pending_shutdown_edit: Optional[Dict[str, Any]] = None
         self.logger.info("Bot Runner инициализирован")
 
     def setup_signal_handlers(self) -> None:
@@ -48,7 +50,7 @@ class BotRunner:
         
         self.logger.info("Обработчики сигналов настроены")
 
-    def _signal_handler(self, signum=None, frame=None) -> None:
+    def _signal_handler(self, signum: Optional[int] = None, frame: Optional[Any] = None) -> None:
         """
         Обработчик сигналов для graceful shutdown.
         
@@ -70,7 +72,7 @@ class BotRunner:
             if hasattr(self, 'logger') and self.logger is not None:
                 try:
                     self.logger.info("Получен сигнал остановки, начинаю graceful shutdown")
-                except:
+                except Exception:
                     pass  # Игнорируем ошибки логирования
                     
         except Exception as e:
@@ -91,7 +93,7 @@ class BotRunner:
             loop = asyncio.get_running_loop()
             for sig in (signal.SIGINT, signal.SIGTERM):
                 try:
-                    loop.add_signal_handler(sig, self._signal_handler)
+                    loop.add_signal_handler(sig, lambda: self._signal_handler(sig, None))
                 except (ValueError, RuntimeError, AttributeError) as e:
                     self.logger.warning(f"Не удалось установить обработчик сигнала {sig}: {e}")
 
@@ -100,7 +102,7 @@ class BotRunner:
                 self.logger.info("[Supervisor] Старт SupportBot (режим по умолчанию)")
                 self.request_start_main_event.clear()
 
-                async def request_start_main(payload: dict):
+                async def request_start_main(payload: Dict[str, Any]) -> None:
                     self.logger.info("[Supervisor] Получен запрос запуска основного бота из SupportBot")
                     self.pending_startup_edit = payload or None
                     self.request_start_main_event.set()
@@ -262,6 +264,8 @@ class BotRunner:
         """
         Асинхронно останавливает бота.
         """
+        if self.bot is None:
+            return
         try:
             await self.bot.stop()
         except Exception as e:

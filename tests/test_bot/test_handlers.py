@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+from typing import Any, Union
 
 import pytest
 
@@ -7,7 +8,7 @@ from bot.handlers import CommandHandlers
 
 
 @pytest.mark.asyncio
-async def test_start_command_replies(fake_update, fake_context, async_retry_stub):
+async def test_start_command_replies(fake_update: Any, fake_context: Any, async_retry_stub: Any) -> None:
     handler = CommandHandlers(image_generator=MagicMock(), next_run_provider=lambda: None)
     async_retry_stub(handler)
 
@@ -17,7 +18,7 @@ async def test_start_command_replies(fake_update, fake_context, async_retry_stub
 
 
 @pytest.mark.asyncio
-async def test_help_command_replies(fake_update, fake_context, async_retry_stub):
+async def test_help_command_replies(fake_update: Any, fake_context: Any, async_retry_stub: Any) -> None:
     handler = CommandHandlers(image_generator=MagicMock(), next_run_provider=None)
     async_retry_stub(handler)
 
@@ -31,10 +32,10 @@ async def test_help_command_replies(fake_update, fake_context, async_retry_stub)
 
 
 @pytest.mark.asyncio
-async def test_start_command_handles_retry_failure(fake_update, fake_context, monkeypatch):
+async def test_start_command_handles_retry_failure(fake_update: Any, fake_context: Any, monkeypatch: Any) -> None:
     handler = CommandHandlers(image_generator=MagicMock(), next_run_provider=None)
 
-    async def failing_retry(func, *args, **kwargs):
+    async def failing_retry(func: Any, *args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("boom")
 
     fake_logger = MagicMock()
@@ -48,10 +49,11 @@ async def test_start_command_handles_retry_failure(fake_update, fake_context, mo
 
 
 @pytest.mark.asyncio
-async def test_help_command_admin_version(fake_update, fake_context, async_retry_stub):
+async def test_help_command_admin_version(fake_update: Any, fake_context: Any, async_retry_stub: Any) -> None:
     handler = CommandHandlers(image_generator=MagicMock(), next_run_provider=lambda: None)
     async_retry_stub(handler)
-    handler.admins_store = SimpleNamespace(is_admin=lambda _uid: True)
+    # Используем Union для совместимости с тестовым SimpleNamespace
+    handler.admins_store = SimpleNamespace(is_admin=lambda _uid: True)  # type: ignore[assignment]
 
     await handler.help_command(fake_update, fake_context)
 
@@ -61,22 +63,22 @@ async def test_help_command_admin_version(fake_update, fake_context, async_retry
 
 
 @pytest.mark.asyncio
-async def test_set_frog_limit_command_success(fake_update, fake_context):
+async def test_set_frog_limit_command_success(fake_update: Any, fake_context: Any) -> None:
     class FakeUsage:
-        def __init__(self):
-            self.frog_threshold = 70
-            self.monthly_quota = 100
-            self.total = 10
+        def __init__(self) -> None:
+            self.frog_threshold: int = 70
+            self.monthly_quota: int = 100
+            self.total: int = 10
 
-        def set_frog_threshold(self, value):
+        def set_frog_threshold(self, value: int) -> int:
             self.frog_threshold = value
             return value
 
-        def get_limits_info(self):
+        def get_limits_info(self) -> tuple[int, int, int]:
             return self.total, self.frog_threshold, self.monthly_quota
 
     handler = CommandHandlers(image_generator=MagicMock(), next_run_provider=None)
-    handler.admins_store = SimpleNamespace(is_admin=lambda _uid: True)
+    handler.admins_store = SimpleNamespace(is_admin=lambda _uid: True)  # type: ignore[assignment]
 
     fake_context.application.bot_data["usage"] = FakeUsage()
     fake_context.args = ["80"]
@@ -89,9 +91,9 @@ async def test_set_frog_limit_command_success(fake_update, fake_context):
 
 
 @pytest.mark.asyncio
-async def test_set_frog_limit_command_invalid(fake_update, fake_context):
+async def test_set_frog_limit_command_invalid(fake_update: Any, fake_context: Any) -> None:
     handler = CommandHandlers(image_generator=MagicMock(), next_run_provider=None)
-    handler.admins_store = SimpleNamespace(is_admin=lambda _uid: True)
+    handler.admins_store = SimpleNamespace(is_admin=lambda _uid: True)  # type: ignore[assignment]
     fake_context.args = ["-5"]
 
     await handler.set_frog_limit_command(fake_update, fake_context)
@@ -102,32 +104,32 @@ async def test_set_frog_limit_command_invalid(fake_update, fake_context):
 
 
 @pytest.mark.asyncio
-async def test_frog_command_success(fake_update, fake_context, async_retry_stub, monkeypatch):
+async def test_frog_command_success(fake_update: Any, fake_context: Any, async_retry_stub: Any, monkeypatch: Any) -> None:
     class DummyGenerator:
-        def __init__(self):
+        def __init__(self) -> None:
             self.generate_frog_image = AsyncMock(return_value=(b"image", "caption"))
             self.save_image_locally = MagicMock(return_value="saved")
             self.get_random_saved_image = MagicMock(return_value=None)
 
     class DummyUsage:
-        def __init__(self):
-            self.count = 0
-            self.monthly_quota = 100
-            self.frog_threshold = 70
+        def __init__(self) -> None:
+            self.count: int = 0
+            self.monthly_quota: int = 100
+            self.frog_threshold: int = 70
 
-        def can_use_frog(self):
+        def can_use_frog(self) -> bool:
             return True
 
-        def get_limits_info(self):
+        def get_limits_info(self) -> tuple[int, int, int]:
             return self.count, self.frog_threshold, self.monthly_quota
 
-        def increment(self, value):
+        def increment(self, value: int) -> None:
             self.count += value
 
     generator = DummyGenerator()
-    handler = CommandHandlers(image_generator=generator, next_run_provider=None)
+    handler = CommandHandlers(image_generator=generator, next_run_provider=None)  # type: ignore[arg-type]
     async_retry_stub(handler)
-    handler.admins_store = SimpleNamespace(is_admin=lambda _uid: False, list_all_admins=lambda: [])
+    handler.admins_store = SimpleNamespace(is_admin=lambda _uid: False, list_all_admins=lambda: [])  # type: ignore[assignment]
 
     fake_context.application.bot_data["usage"] = DummyUsage()
 
@@ -140,28 +142,28 @@ async def test_frog_command_success(fake_update, fake_context, async_retry_stub,
 
 
 @pytest.mark.asyncio
-async def test_frog_command_usage_limit(fake_update, fake_context, async_retry_stub):
+async def test_frog_command_usage_limit(fake_update: Any, fake_context: Any, async_retry_stub: Any) -> None:
     class DummyGenerator:
-        def __init__(self):
+        def __init__(self) -> None:
             self.generate_frog_image = AsyncMock(return_value=(b"image", "caption"))
             self.save_image_locally = MagicMock(return_value="saved")
             self.get_random_saved_image = MagicMock(return_value=None)
 
     class LimitedUsage:
-        def __init__(self):
-            self.monthly_quota = 100
-            self.frog_threshold = 70
+        def __init__(self) -> None:
+            self.monthly_quota: int = 100
+            self.frog_threshold: int = 70
 
-        def can_use_frog(self):
+        def can_use_frog(self) -> bool:
             return False
 
-        def get_limits_info(self):
+        def get_limits_info(self) -> tuple[int, int, int]:
             return 70, self.frog_threshold, self.monthly_quota
 
     generator = DummyGenerator()
-    handler = CommandHandlers(image_generator=generator, next_run_provider=None)
+    handler = CommandHandlers(image_generator=generator, next_run_provider=None)  # type: ignore[arg-type]
     async_retry_stub(handler)
-    handler.admins_store = SimpleNamespace(is_admin=lambda _uid: False)
+    handler.admins_store = SimpleNamespace(is_admin=lambda _uid: False)  # type: ignore[assignment]
 
     fake_context.application.bot_data["usage"] = LimitedUsage()
 

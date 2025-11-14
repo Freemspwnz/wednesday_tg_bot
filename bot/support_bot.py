@@ -5,12 +5,13 @@
 import asyncio
 import os
 from pathlib import Path
-from typing import Awaitable, Callable, Optional, List
+from typing import Awaitable, Callable, Optional, List, Dict, Any
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 from telegram.request import HTTPXRequest
 from telegram.error import TimedOut as _TTimedOut, NetworkError as _TNetworkError
+from loguru import logger
 
 from utils.logger import get_logger
 from utils.config import config
@@ -23,27 +24,30 @@ class SupportBot:
     Никогда не должен работать одновременно с основным ботом.
     """
 
-    def __init__(self, request_start_main: Optional[Callable[[dict], Awaitable[None]]] = None):
+    def __init__(self, request_start_main: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None) -> None:
         self.logger = get_logger(__name__)
-        request = HTTPXRequest(
+        request: HTTPXRequest = HTTPXRequest(
             connection_pool_size=20,
             pool_timeout=5.0,
             read_timeout=20.0,
             connect_timeout=15.0,
         )
-        self.application = (
+        # config.telegram_token проверяется в _validate_required_vars, поэтому не может быть None
+        telegram_token: str = config.telegram_token or ""
+        assert telegram_token, "TELEGRAM_BOT_TOKEN должен быть установлен"
+        self.application: Application = (
             Application.builder()
-            .token(config.telegram_token)
+            .token(telegram_token)
             .request(request)
             .build()
         )
-        self.admins = AdminsStore()
-        self.request_start_main = request_start_main
-        self.is_running = False
+        self.admins: AdminsStore = AdminsStore()
+        self.request_start_main: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = request_start_main
+        self.is_running: bool = False
         # Данные для редактирования сообщения об остановке основного
-        self.pending_shutdown_edit: Optional[dict] = None
+        self.pending_shutdown_edit: Optional[Dict[str, Any]] = None
         # Данные для цепочки запуска основного: сообщение "Запускаю..."
-        self.pending_startup_edit: Optional[dict] = None
+        self.pending_startup_edit: Optional[Dict[str, Any]] = None
 
     def setup_handlers(self) -> None:
         self.application.add_handler(CommandHandler("start", self.start_main_command))
@@ -121,7 +125,9 @@ class SupportBot:
         delay = 2.0
         for attempt in range(4):
             try:
-                await self.application.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+                updater = self.application.updater
+                if updater:
+                    await updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
                 self.logger.info("SupportBot polling запущен")
                 break
             except _TGConflict as e:
@@ -273,6 +279,9 @@ class SupportBot:
 
     async def maintenance_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Ответ на любые неизвестные команды: сообщение о техработах."""
+        if not update.message:
+            return
+        
         try:
             user_id = update.effective_user.id if update and update.effective_user else None
             chat_id = update.effective_chat.id if update and update.effective_chat else None
@@ -289,12 +298,16 @@ class SupportBot:
             self.logger.warning(f"Не удалось отправить сообщение о техработах: {e}")
 
     def _is_admin(self, user_id: int) -> bool:
+        """Проверяет, является ли пользователь администратором."""
         return self.admins.is_admin(user_id)
 
     async def log_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Отправляет логи. Использование: /log [count] (1..10). Без аргумента — последний файл."""
+        if not update.message or not update.effective_user or not update.effective_chat:
+            return
+        
         user_id = update.effective_user.id
-        chat_id = update.effective_chat.id if update and update.effective_chat else None
+        chat_id = update.effective_chat.id
         self.logger.info(f"SupportBot /log от user_id={user_id}, chat_id={chat_id}")
         if not self._is_admin(user_id):
             await update.message.reply_text("❌ Доступно только администратору")
@@ -357,8 +370,11 @@ class SupportBot:
 
     async def start_main_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Команда /start от админа — запускает основной бот и выключает SupportBot."""
+        if not update.message or not update.effective_user or not update.effective_chat:
+            return
+        
         user_id = update.effective_user.id
-        chat_id = update.effective_chat.id if update and update.effective_chat else None
+        chat_id = update.effective_chat.id
         self.logger.info(f"SupportBot /start от user_id={user_id}, chat_id={chat_id}")
         if not self._is_admin(user_id):
             await update.message.reply_text("❌ Доступно только администратору")
@@ -412,8 +428,11 @@ class SupportBot:
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Команда /help (только для админа): справка по резервному боту."""
+        if not update.message or not update.effective_user or not update.effective_chat:
+            return
+        
         user_id = update.effective_user.id
-        chat_id = update.effective_chat.id if update and update.effective_chat else None
+        chat_id = update.effective_chat.id
         self.logger.info(f"SupportBot /help от user_id={user_id}, chat_id={chat_id}")
         if not self._is_admin(user_id):
             await update.message.reply_text("❌ Доступно только администратору")

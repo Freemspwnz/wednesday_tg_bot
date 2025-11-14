@@ -2,7 +2,7 @@ import importlib
 import os
 import sys
 from types import SimpleNamespace
-from typing import Callable, Optional
+from typing import Callable, Optional, Any, Dict, Generator
 from unittest.mock import AsyncMock
 
 import pytest
@@ -22,7 +22,7 @@ for key, value in _session_env_defaults.items():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def session_env_defaults():
+def session_env_defaults() -> Generator[None, None, None]:
     """Устанавливает обязательные переменные окружения до импорта модулей проекта."""
     yield
     _session_monkeypatch.undo()
@@ -31,7 +31,7 @@ def session_env_defaults():
 class _InMemoryModelsStore:
     """Простое хранилище моделей для тестов без файловой системы."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         self._gigachat_model: Optional[str] = None
         self._gigachat_available: list[str] = []
         self._kandinsky_model: tuple[Optional[str], Optional[str]] = (None, None)
@@ -57,15 +57,15 @@ class _InMemoryModelsStore:
     def get_kandinsky_model(self) -> tuple[Optional[str], Optional[str]]:
         return self._kandinsky_model
 
-    def set_kandinsky_available_models(self, models) -> None:
-        self._kandinsky_available = list(models)
+    def set_kandinsky_available_models(self, models: list[Any] | list[str]) -> None:
+        self._kandinsky_available = list(models) if models else []
 
     def get_kandinsky_available_models(self) -> list[str]:
         return list(self._kandinsky_available)
 
 
 @pytest.fixture(autouse=True)
-def base_env(monkeypatch, tmp_path_factory):
+def base_env(monkeypatch: Any, tmp_path_factory: Any) -> Generator[None, None, None]:
     """Гарантирует наличие обязательных переменных окружения и изолированных хранилищ."""
     storage_dir = tmp_path_factory.mktemp("storage")
     env_defaults = {
@@ -80,29 +80,36 @@ def base_env(monkeypatch, tmp_path_factory):
     }
     for key, value in env_defaults.items():
         monkeypatch.setenv(key, value)
+    yield
 
 
 @pytest.fixture(autouse=True)
-def patch_models_store(monkeypatch):
+def patch_models_store(monkeypatch: Any) -> Generator[None, None, None]:
     """Подменяет ModelsStore на простую in-memory реализацию."""
     import utils.models_store as models_store_module
     import utils.admins_store as admins_store_module
 
     monkeypatch.setattr(models_store_module, "ModelsStore", _InMemoryModelsStore)
-    monkeypatch.setattr(admins_store_module, "AdminsStore", lambda *args, **kwargs: SimpleNamespace(
-        is_admin=lambda user_id: False,
-        list_admins=lambda: [],
-    ))
+    # Создаём совместимый с AdminsStore объект для тестов
+    class _TestAdminsStore:
+        def is_admin(self, user_id: int) -> bool:
+            return False
+        def list_admins(self) -> list[int]:
+            return []
+        def list_all_admins(self) -> list[int]:
+            return []
+    
+    monkeypatch.setattr(admins_store_module, "AdminsStore", lambda *args, **kwargs: _TestAdminsStore())
     yield
 
 
 @pytest.fixture(autouse=True)
-def patch_gigachat_client(monkeypatch):
+def patch_gigachat_client(monkeypatch: Any) -> Generator[None, None, None]:
     """Исключает реальные вызовы GigaChat при создании ImageGenerator."""
 
     class _DummyGigaChatClient:
-        def __init__(self, *args, **kwargs):
-            self._prompt = "dummy prompt"
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._prompt: str = "dummy prompt"
 
         def test_connection(self) -> bool:
             return False
@@ -117,15 +124,15 @@ def patch_gigachat_client(monkeypatch):
 
 
 @pytest.fixture
-def reload_config():
+def reload_config() -> Generator[Callable[[], Any], None, None]:
     """
     Возвращает функцию для повторной загрузки utils.config с актуальными env.
     После теста модуль очищается из sys.modules.
     """
 
-    loaded_modules = []
+    loaded_modules: list[Any] = []
 
-    def _reload():
+    def _reload() -> Any:
         if "utils.config" in sys.modules:
             del sys.modules["utils.config"]
         module = importlib.import_module("utils.config")
@@ -142,7 +149,7 @@ def reload_config():
 
 
 @pytest.fixture
-def fake_update():
+def fake_update() -> Any:
     """Создает простую структуру Update с асинхронным reply_text."""
     status_message = SimpleNamespace(delete=AsyncMock())
     reply_text = AsyncMock(return_value=status_message)
@@ -157,19 +164,19 @@ def fake_update():
 
 
 @pytest.fixture
-def fake_context():
+def fake_context() -> Any:
     """Создает минимальный контекст Telegram с AsyncMock ботом."""
     class _App:
-        def __init__(self):
-            self.bot_data = {"bot": SimpleNamespace(stop=AsyncMock())}
+        def __init__(self) -> None:
+            self.bot_data: Dict[str, Any] = {"bot": SimpleNamespace(stop=AsyncMock())}
             self.updater = SimpleNamespace(stop=AsyncMock())
 
-        async def stop(self):
+        async def stop(self) -> None:
             return None
 
     class _Context:
-        def __init__(self):
-            self.args = []
+        def __init__(self) -> None:
+            self.args: list[str] = []
             self.application = _App()
             self.bot = SimpleNamespace(
                 send_document=AsyncMock(),
@@ -181,11 +188,11 @@ def fake_context():
 
 
 @pytest.fixture
-def async_retry_stub(monkeypatch):
+def async_retry_stub(monkeypatch: Any) -> Callable[[Any], None]:
     """Фикстура, подменяющая _retry_on_connect_error на прямой вызов функции."""
 
-    def _apply(target):
-        async def _direct(func: Callable, *args, **kwargs):
+    def _apply(target: Any) -> None:
+        async def _direct(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
             return await func(*args, **kwargs)
 
         monkeypatch.setattr(target, "_retry_on_connect_error", _direct)

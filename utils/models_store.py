@@ -5,13 +5,14 @@
 import os
 import json
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
+from loguru import logger
 
 from utils.logger import get_logger
 
 
 class ModelsStore:
-    def __init__(self, storage_path: str | None = None):
+    def __init__(self, storage_path: Optional[str] = None) -> None:
         self.logger = get_logger(__name__)
         # Разрешаем как файл, так и директорию в MODELS_STORAGE
         env_value = os.getenv("MODELS_STORAGE")
@@ -83,7 +84,7 @@ class ModelsStore:
         self._data["kandinsky"]["current_pipeline_name"] = pipeline_name
         self._save()
 
-    def get_kandinsky_model(self) -> tuple[Optional[str], Optional[str]]:
+    def get_kandinsky_model(self) -> Tuple[Optional[str], Optional[str]]:
         """Возвращает текущую модель Kandinsky (pipeline_id, pipeline_name)."""
         kandinsky = self._data.get("kandinsky", {})
         return (
@@ -100,23 +101,25 @@ class ModelsStore:
 
     def get_gigachat_model(self) -> Optional[str]:
         """Возвращает текущую модель GigaChat."""
-        return self._data.get("gigachat", {}).get("current_model")
+        gigachat_data = self._data.get("gigachat", {})
+        model: Optional[str] = gigachat_data.get("current_model")
+        return model if isinstance(model, str) else None
     
-    def set_kandinsky_available_models(self, models: List[Dict[str, Any]]) -> None:
+    def set_kandinsky_available_models(self, models: List[Dict[str, Any]] | List[str]) -> None:
         """
         Сохраняет список доступных моделей Kandinsky.
         
         Args:
-            models: Список моделей, каждая модель - словарь с полями 'id' и 'name'
+            models: Список моделей (словари с полями 'id' и 'name' или строки)
         """
         if "kandinsky" not in self._data:
             self._data["kandinsky"] = {}
         # Сохраняем модели как список строк в формате "Name (ID: xxx)" для совместимости
-        formatted_models = []
+        formatted_models: List[str] = []
         for model in models:
             if isinstance(model, dict):
-                model_id = model.get('id', '')
-                model_name = model.get('name', 'Unknown')
+                model_id: str = str(model.get('id', ''))
+                model_name: str = str(model.get('name', 'Unknown'))
                 formatted_models.append(f"{model_name} (ID: {model_id})")
             elif isinstance(model, str):
                 formatted_models.append(model)
@@ -134,7 +137,9 @@ class ModelsStore:
         Returns:
             Список строк моделей в формате "Name (ID: xxx)"
         """
-        return self._data.get("kandinsky", {}).get("available_models", [])
+        kandinsky_data = self._data.get("kandinsky", {})
+        models: List[str] = kandinsky_data.get("available_models", [])
+        return list(models) if isinstance(models, list) else []
     
     def set_gigachat_available_models(self, models: List[str]) -> None:
         """
@@ -159,5 +164,7 @@ class ModelsStore:
         Returns:
             Список названий моделей
         """
-        return self._data.get("gigachat", {}).get("available_models", [])
+        gigachat_data = self._data.get("gigachat", {})
+        models: List[str] = gigachat_data.get("available_models", [])
+        return list(models) if isinstance(models, list) else []
 

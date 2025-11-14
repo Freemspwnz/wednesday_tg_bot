@@ -5,14 +5,15 @@
 import os
 import json
 from pathlib import Path
-from typing import List, Set
+from typing import List, Set, Optional, Dict, Any
+from loguru import logger
 
 from utils.logger import get_logger
 from utils.config import config
 
 
 class AdminsStore:
-    def __init__(self, storage_path: str | None = None):
+    def __init__(self, storage_path: Optional[str] = None) -> None:
         self.logger = get_logger(__name__)
         # Разрешаем как файл, так и директорию в ADMINS_STORAGE
         env_value = os.getenv("ADMINS_STORAGE")
@@ -23,10 +24,10 @@ class AdminsStore:
             resolved = candidate if candidate.suffix.lower() == ".json" else (candidate / "admins.json")
         else:
             resolved = Path("data") / "admins.json"
-        self.path = resolved
+        self.path: Path = resolved
         if self.path.parent and str(self.path.parent) not in ("", "."):
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._data: dict = {}
+        self._data: Dict[str, Any] = {}
         self._load()
 
     def _load(self) -> None:

@@ -1,8 +1,9 @@
+from typing import Any
 import pytest
 import dotenv
 
 
-def test_config_loads_required_env(monkeypatch, reload_config):
+def test_config_loads_required_env(monkeypatch: Any, reload_config: Any) -> None:
     custom_env = {
         "TELEGRAM_BOT_TOKEN": "custom-token",
         "KANDINSKY_API_KEY": "custom-api",
@@ -21,7 +22,7 @@ def test_config_loads_required_env(monkeypatch, reload_config):
     assert config_module.config.gigachat_api_url == "https://example.com/chat"
 
 
-def test_config_missing_required_env(monkeypatch, reload_config):
+def test_config_missing_required_env(monkeypatch: Any, reload_config: Any) -> None:
     monkeypatch.setattr(dotenv, "load_dotenv", lambda *args, **kwargs: False)
 
     required_vars = [

@@ -6,7 +6,10 @@
 import requests
 import uuid
 import time
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any, Union
+from pathlib import Path
+from loguru import logger
+
 from utils.logger import get_logger
 from utils.config import config
 
@@ -17,15 +20,18 @@ class GigaChatClient:
     Обеспечивает получение токенов и генерацию промптов.
     """
     
-    def __init__(self):
+    def __init__(self) -> None:
         """Инициализация клиента GigaChat."""
         self.logger = get_logger(__name__)
-        self.session = requests.Session()
+        self.session: requests.Session = requests.Session()
         
         # Настройка проверки SSL сертификата
         # Приоритет: путь к сертификату > флаг verify_ssl
-        verify_ssl = config.gigachat_verify_ssl
-        self.session.verify = verify_ssl
+        verify_ssl: Union[bool, str] = config.gigachat_verify_ssl
+        # requests.Session.verify может быть bool или str (путь к сертификату)
+        # mypy не понимает, что verify может быть str, но requests это поддерживает
+        if isinstance(verify_ssl, (bool, str)):
+            self.session.verify = verify_ssl
         self.session.trust_env = False
         
         if verify_ssl is False:
@@ -35,26 +41,25 @@ class GigaChatClient:
             self.logger.warning("⚠️ Проверка SSL сертификатов для GigaChat отключена! Это снижает безопасность.")
         elif isinstance(verify_ssl, str):
             # Указан путь к сертификату
-            from pathlib import Path
             cert_path = Path(verify_ssl)
             if cert_path.exists():
                 self.logger.info(f"✅ Используется сертификат для GigaChat: {verify_ssl}")
             else:
                 self.logger.warning(f"⚠️ Файл сертификата не найден: {verify_ssl}. Проверка SSL может не работать.")
         
-        self.access_token = None
-        self.token_expiry_time = None
+        self.access_token: Optional[str] = None
+        self.token_expiry_time: Optional[float] = None
         
         # Получаем конфигурацию из config
-        self.auth_url = config.gigachat_auth_url
-        self.api_url = config.gigachat_api_url
-        self.authorization_key = config.gigachat_authorization_key
-        self.scope = config.gigachat_scope
+        self.auth_url: str = config.gigachat_auth_url
+        self.api_url: str = config.gigachat_api_url
+        self.authorization_key: str = config.gigachat_authorization_key
+        self.scope: str = config.gigachat_scope
         # Загружаем текущую модель из хранилища или используем из конфига
         from utils.models_store import ModelsStore
         models_store = ModelsStore()
-        saved_model = models_store.get_gigachat_model()
-        self.model = saved_model or config.gigachat_model
+        saved_model: Optional[str] = models_store.get_gigachat_model()
+        self.model: str = saved_model or config.gigachat_model
         if not saved_model:
             # Сохраняем модель по умолчанию при первой инициализации
             models_store.set_gigachat_model(self.model)
@@ -188,7 +193,9 @@ class GigaChatClient:
                     return self._get_fallback_models()
                 
                 # Извлекаем названия моделей
-                models_list = []
+                models_list: List[str] = []
+                if models_data is None:
+                    return self._get_fallback_models()
                 for model in models_data:
                     if isinstance(model, dict):
                         # Если модель - это объект, берем поле id или name

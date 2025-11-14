@@ -4,7 +4,8 @@
 """
 
 import os
-from typing import Optional
+from typing import Optional, List
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Загружаем переменные окружения из файла .env
@@ -17,7 +18,7 @@ class Config:
     Содержит все необходимые настройки и токены.
     """
     
-    def __init__(self):
+    def __init__(self) -> None:
         """Инициализация конфигурации с проверкой обязательных переменных."""
         self._validate_required_vars()
     
@@ -57,7 +58,7 @@ class Config:
         return os.getenv(name)
     
     @property
-    def telegram_token(self) -> str:
+    def telegram_token(self) -> Optional[str]:
         """
         Токен Telegram бота.
         
@@ -67,7 +68,7 @@ class Config:
         return self._get_env_var('TELEGRAM_BOT_TOKEN')
     
     @property
-    def kandinsky_api_key(self) -> str:
+    def kandinsky_api_key(self) -> Optional[str]:
         """
         API ключ для сервиса Kandinsky (Fusion Brain).
         
@@ -77,7 +78,7 @@ class Config:
         return self._get_env_var('KANDINSKY_API_KEY')
     
     @property
-    def kandinsky_secret_key(self) -> str:
+    def kandinsky_secret_key(self) -> Optional[str]:
         """
         Secret ключ для сервиса Kandinsky (Fusion Brain).
         
@@ -87,7 +88,7 @@ class Config:
         return self._get_env_var('KANDINSKY_SECRET_KEY')
     
     @property
-    def chat_id(self) -> str:
+    def chat_id(self) -> Optional[str]:
         """
         ID чата или канала для отправки сообщений.
         
@@ -236,7 +237,7 @@ class Config:
         return None
     
     @property
-    def gigachat_verify_ssl(self):
+    def gigachat_verify_ssl(self) -> str | bool:
         """
         Настройка проверки SSL сертификатов для GigaChat API.
         
@@ -320,7 +321,7 @@ class SchedulerConfig:
     """Константы для настройки планировщика задач."""
     
     @staticmethod
-    def _parse_send_times():
+    def _parse_send_times() -> List[str]:
         """Парсит времена отправки из ENV с валидацией."""
         env_times = os.getenv('SCHEDULER_SEND_TIMES')
         if env_times:
@@ -343,7 +344,7 @@ class SchedulerConfig:
     SEND_TIMES = _parse_send_times()
     
     @staticmethod
-    def _parse_wednesday_day():
+    def _parse_wednesday_day() -> int:
         """Парсит день недели с валидацией."""
         env_day = os.getenv('SCHEDULER_WEDNESDAY_DAY')
         if env_day:

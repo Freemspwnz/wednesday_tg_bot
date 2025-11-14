@@ -6,7 +6,8 @@
 import asyncio
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from typing import Callable, Awaitable, Optional
+from typing import Callable, Awaitable, Optional, Dict, Any, Set, List, Union
+from loguru import logger
 
 from utils.logger import get_logger
 from utils.config import SchedulerConfig
@@ -23,21 +24,21 @@ class TaskScheduler:
     - Логирование выполнения задач
     """
     
-    def __init__(self):
+    def __init__(self) -> None:
         """Инициализация планировщика задач."""
         self.logger = get_logger(__name__)
-        self.running = False
-        self.tasks = {}
+        self.running: bool = False
+        self.tasks: Dict[str, Any] = {}  # Может содержать Callable или Set[str] для '_executed'
         
         # Настройки планировщика
-        self.send_times = SchedulerConfig.SEND_TIMES
-        self.wednesday = SchedulerConfig.WEDNESDAY
-        self.check_interval = SchedulerConfig.CHECK_INTERVAL
-        self.tz = ZoneInfo(getattr(SchedulerConfig, 'TZ', 'Europe/Moscow'))
+        self.send_times: List[str] = SchedulerConfig.SEND_TIMES
+        self.wednesday: int = SchedulerConfig.WEDNESDAY
+        self.check_interval: int = SchedulerConfig.CHECK_INTERVAL
+        self.tz: ZoneInfo = ZoneInfo(getattr(SchedulerConfig, 'TZ', 'Europe/Moscow'))
         
         self.logger.info("Планировщик задач инициализирован")
     
-    def schedule_wednesday_task(self, task_func: Callable[[], Awaitable[None]]) -> None:
+    def schedule_wednesday_task(self, task_func: Callable[[Optional[str]], Awaitable[None]]) -> None:
         """
         Планирует задачу на выполнение каждую среду в указанное время.
         
@@ -88,7 +89,7 @@ class TaskScheduler:
         
         self.logger.info("Задача с интервалом успешно запланирована")
     
-    async def _run_async_task(self, task_func: Callable[[], Awaitable[None]]) -> None:
+    async def _run_async_task(self, task_func: Callable[..., Awaitable[None]]) -> None:
         """
         Обертка для выполнения асинхронных задач в планировщике.
         
@@ -139,15 +140,20 @@ class TaskScheduler:
             # Проверяем, что есть запланированные времена
             if not self.send_times:
                 onboarding_key = f"wednesday_executed_{now.strftime('%Y-%m-%d')}"
-                if onboarding_key not in self.tasks.get('_executed', set()):
+                executed_value = self.tasks.get('_executed', set())
+                executed_set: Set[str] = executed_value if isinstance(executed_value, set) else set()
+                if onboarding_key not in executed_set:
                     self.logger.warning("Не задано время отправки (SCHEDULER_SEND_TIMES пусто)")
                     if '_executed' not in self.tasks:
                         self.tasks['_executed'] = set()
-                    self.tasks['_executed'].add(onboarding_key)
+                    executed_set = self.tasks['_executed']
+                    if isinstance(executed_set, set):
+                        executed_set.add(onboarding_key)
                 return
             
             # Проверяем каждый временной слот
-            executed = self.tasks.get('_executed', set())
+            executed_value = self.tasks.get('_executed', set())
+            executed: Set[str] = executed_value if isinstance(executed_value, set) else set()
             for time_str in self.send_times:
                 key = f"wednesday_{now.strftime('%Y-%m-%d')}_{time_str}"
                 
@@ -173,7 +179,9 @@ class TaskScheduler:
                             await self._run_async_task(task_func)
                         if '_executed' not in self.tasks:
                             self.tasks['_executed'] = set()
-                        self.tasks['_executed'].add(key)
+                        executed_set = self.tasks['_executed']
+                        if isinstance(executed_set, set):
+                            executed_set.add(key)
                         self.logger.info(f"Задача на среду выполнена: {key}")
 
     async def _check_daily_task(self) -> None:
@@ -231,7 +239,7 @@ class TaskScheduler:
         now = datetime.now(self.tz)
 
         # вычислим список кандидатов времени запуска
-        candidates: list[datetime] = []
+        candidates: List[datetime] = []
 
         # Если сегодня среда — сначала проверяем ближайшие слоты сегодня, которые еще не прошли
         if now.weekday() == self.wednesday:
@@ -251,7 +259,10 @@ class TaskScheduler:
             h, m = t.split(":")
             candidates.append(base.replace(hour=int(h), minute=int(m)))
 
-        return min(candidates) if candidates else None
+        if candidates:
+            next_run: datetime = min(candidates)
+            return next_run
+        return None
     
     def clear_all_jobs(self) -> None:
         """

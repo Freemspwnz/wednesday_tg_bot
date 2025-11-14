@@ -1,20 +1,22 @@
 from datetime import datetime
+from typing import Any
+from pathlib import Path
 
 from utils.usage_tracker import UsageTracker
 
 
-def test_usage_tracker_initial_save(tmp_path):
+def test_usage_tracker_initial_save(tmp_path: Path) -> None:
     storage = tmp_path / "usage.json"
-    tracker = UsageTracker(storage_path=storage, monthly_quota=50, frog_threshold=20)
+    tracker = UsageTracker(storage_path=str(storage), monthly_quota=50, frog_threshold=20)
 
     assert storage.exists()
     assert tracker.monthly_quota == 50
     assert tracker.frog_threshold == 20
 
 
-def test_usage_tracker_increment_and_limits(tmp_path):
+def test_usage_tracker_increment_and_limits(tmp_path: Path) -> None:
     storage = tmp_path / "usage.json"
-    tracker = UsageTracker(storage_path=storage, monthly_quota=10, frog_threshold=5)
+    tracker = UsageTracker(storage_path=str(storage), monthly_quota=10, frog_threshold=5)
     when = datetime(2025, 1, 1)
 
     tracker.increment(2, when=when)
@@ -26,13 +28,13 @@ def test_usage_tracker_increment_and_limits(tmp_path):
     assert tracker.can_use_frog(when=when) is False
 
     # Перезагружаем из файла и проверяем сохранение
-    reloaded = UsageTracker(storage_path=storage, monthly_quota=10, frog_threshold=5)
+    reloaded = UsageTracker(storage_path=str(storage), monthly_quota=10, frog_threshold=5)
     assert reloaded.get_month_total(when=when) == 5
 
 
-def test_usage_tracker_threshold_and_totals(tmp_path):
+def test_usage_tracker_threshold_and_totals(tmp_path: Path) -> None:
     storage = tmp_path / "usage.json"
-    tracker = UsageTracker(storage_path=storage, monthly_quota=15, frog_threshold=10)
+    tracker = UsageTracker(storage_path=str(storage), monthly_quota=15, frog_threshold=10)
     when = datetime(2025, 2, 1)
 
     tracker.set_month_total(7, when=when)

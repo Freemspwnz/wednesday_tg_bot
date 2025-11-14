@@ -5,7 +5,12 @@
 
 import sys
 from pathlib import Path
+from typing import Optional, TYPE_CHECKING
 from loguru import logger
+
+if TYPE_CHECKING:
+    from loguru import Logger as LoggerType
+
 from utils.config import config
 
 
@@ -55,7 +60,7 @@ def setup_logger() -> None:
     logger.info("Система логирования успешно настроена")
 
 
-def get_logger(name: str = None):
+def get_logger(name: Optional[str] = None) -> 'LoggerType':
     """
     Получает настроенный логгер для указанного модуля.
     

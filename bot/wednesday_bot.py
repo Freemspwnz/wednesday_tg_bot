@@ -4,18 +4,21 @@
 """
 
 import asyncio
+import os
+from typing import Optional, Dict, Any, List, Tuple
+from pathlib import Path
+
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ChatMemberHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ChatMemberHandler, ContextTypes
 from telegram.request import HTTPXRequest
 from telegram.error import TimedOut as _TTimedOut, NetworkError as _TNetworkError
-from typing import Optional
+from loguru import logger
 
 from utils.logger import get_logger
 from utils.config import config
 from services.image_generator import ImageGenerator
 from services.scheduler import TaskScheduler
 from bot.handlers import CommandHandlers
-import os
 from utils.usage_tracker import UsageTracker
 from utils.chats_store import ChatsStore
 from utils.dispatch_registry import DispatchRegistry
@@ -34,44 +37,52 @@ class WednesdayBot:
     - Обработку ошибок и логирование
     """
     
-    def __init__(self):
+    def __init__(self) -> None:
         """Инициализация основного класса бота."""
         self.logger = get_logger(__name__)
         
         # Инициализируем компоненты
-        request = HTTPXRequest(
+        request: HTTPXRequest = HTTPXRequest(
             connection_pool_size=20,
             pool_timeout=5.0,
             read_timeout=20.0,
             connect_timeout=15.0,
         )
-        self.application = (
+        # config.telegram_token проверяется в _validate_required_vars, поэтому не может быть None
+        telegram_token: str = config.telegram_token or ""
+        assert telegram_token, "TELEGRAM_BOT_TOKEN должен быть установлен"
+        self.application: Application = (
             Application.builder()
-            .token(config.telegram_token)
+            .token(telegram_token)
             .request(request)
             .build()
         )
         
         # Создаем сервисы
-        self.image_generator = ImageGenerator()
-        self.scheduler = TaskScheduler()
-        self.usage = UsageTracker(storage_path=os.getenv("USAGE_STORAGE", "usage_stats.json"), monthly_quota=100, frog_threshold=70)
-        self.chats = ChatsStore()
-        self.dispatch_registry = DispatchRegistry()
-        self.metrics = Metrics()
+        self.image_generator: ImageGenerator = ImageGenerator()
+        self.scheduler: TaskScheduler = TaskScheduler()
+        self.usage: UsageTracker = UsageTracker(storage_path=os.getenv("USAGE_STORAGE", "usage_stats.json"), monthly_quota=100, frog_threshold=70)
+        self.chats: ChatsStore = ChatsStore()
+        self.dispatch_registry: DispatchRegistry = DispatchRegistry()
+        self.metrics: Metrics = Metrics()
         # Данные для пост-старта (например, редактирование сообщения из SupportBot)
-        self.pending_startup_edit = None
+        self.pending_startup_edit: Optional[Dict[str, Any]] = None
+        # Данные для пост-остановки (например, редактирование сообщения об остановке)
+        self.pending_shutdown_edit: Optional[Dict[str, Any]] = None
         # Флаг, чтобы избежать дублирующих сообщений об остановке
-        self._stop_message_sent = False
+        self._stop_message_sent: bool = False
         
         # Создаем обработчики команд
-        self.handlers = CommandHandlers(self.image_generator, self.scheduler.get_next_run)
+        self.handlers: CommandHandlers = CommandHandlers(self.image_generator, self.scheduler.get_next_run)
         
         # ID чата для отправки сообщений
-        self.chat_id = config.chat_id
+        self.chat_id: Optional[str] = config.chat_id
         
         # Флаг состояния бота
-        self.is_running = False
+        self.is_running: bool = False
+        
+        # Задача планировщика (инициализируется при старте)
+        self.scheduler_task: Optional[asyncio.Task[None]] = None
         
         self.logger.info("Wednesday Bot инициализирован")
     
@@ -172,13 +183,13 @@ class WednesdayBot:
         # Если слот не передан планировщиком — сопоставим ближайший (<= now)
         if slot_time is None:
             try:
-                configured_times = list(self.scheduler.send_times or [])
+                configured_times: List[str] = list(self.scheduler.send_times or [])
             except Exception:
                 configured_times = []
-            resolved_slot = None
+            resolved_slot: Optional[str] = None
             if configured_times:
                 try:
-                    candidates = []
+                    candidates: List[Tuple[datetime, str]] = []
                     for t in configured_times:
                         if len(t) == 5 and t[2] == ':' and t[:2].isdigit() and t[3:].isdigit():
                             h, m = int(t[:2]), int(t[3:])
@@ -196,11 +207,13 @@ class WednesdayBot:
         
         try:
             # Сначала соберём список целевых чатов
-            targets = set(self.chats.list_chat_ids() or [])
-            try:
-                targets.add(int(self.chat_id))
-            except Exception:
-                pass
+            targets: set[int] = set(self.chats.list_chat_ids() or [])
+            if self.chat_id:
+                try:
+                    chat_id_int: int = int(str(self.chat_id))
+                    targets.add(chat_id_int)
+                except (ValueError, TypeError):
+                    pass
 
             # Если нет ни одного чата — просто выходим
             if not targets:
@@ -308,10 +321,12 @@ class WednesdayBot:
                 
                 # Отправляем дружелюбные сообщения и случайные изображения во все целевые чаты
                 targets = set(self.chats.list_chat_ids() or [])
-                try:
-                    targets.add(int(self.chat_id))
-                except Exception:
-                    pass
+                if self.chat_id:
+                    try:
+                        chat_id_val: int = int(str(self.chat_id))
+                        targets.add(chat_id_val)
+                    except (ValueError, TypeError):
+                        pass
                 
                 for target_chat in targets:
                     try:
@@ -350,10 +365,12 @@ class WednesdayBot:
             
             # Отправляем дружелюбные сообщения и случайные изображения во все целевые чаты
             targets = set(self.chats.list_chat_ids() or [])
-            try:
-                targets.add(int(self.chat_id))
-            except Exception:
-                pass
+            if self.chat_id:
+                try:
+                    chat_id_error_val: int = int(str(self.chat_id))
+                    targets.add(chat_id_error_val)
+                except (ValueError, TypeError):
+                    pass
             
             for target_chat in targets:
                 try:
@@ -548,10 +565,12 @@ class WednesdayBot:
             for attempt in range(3):
                 try:
                     await self.application.start()
-                    await self.application.updater.start_polling(
-                        allowed_updates=Update.ALL_TYPES,
-                        drop_pending_updates=True
-                    )
+                    updater = self.application.updater
+                    if updater:
+                        await updater.start_polling(
+                            allowed_updates=Update.ALL_TYPES,
+                            drop_pending_updates=True
+                        )
                     break
                 except Exception as e:
                     self.logger.warning(f"Не удалось запустить polling (попытка {attempt+1}/3): {e}")
@@ -626,7 +645,12 @@ class WednesdayBot:
                         admin_chat_id_env = getattr(_cfg, 'admin_chat_id', None)
                         if admin_chat_id_env:
                             try:
-                                skip_admin_edit = int(str(admin_chat_id_env)) == int(str(chat_id))
+                                admin_chat_str: str = str(admin_chat_id_env)
+                                chat_id_str: str = str(chat_id) if chat_id is not None else ""
+                                if admin_chat_str and chat_id_str:
+                                    skip_admin_edit = int(admin_chat_str) == int(chat_id_str)
+                                else:
+                                    skip_admin_edit = False
                             except Exception:
                                 skip_admin_edit = False
                     except Exception:
@@ -672,7 +696,7 @@ class WednesdayBot:
             self.logger.error(f"Ошибка при запуске бота: {e}")
             raise
 
-    async def on_my_chat_member(self, update, context):
+    async def on_my_chat_member(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             my_cm = update.my_chat_member
             if not my_cm:
@@ -805,7 +829,12 @@ class WednesdayBot:
                         admin_chat_id_env = getattr(_cfg, 'admin_chat_id', None)
                         if admin_chat_id_env:
                             try:
-                                skip_admin_edit = int(str(admin_chat_id_env)) == int(str(chat_id))
+                                admin_chat_str: str = str(admin_chat_id_env)
+                                chat_id_str: str = str(chat_id) if chat_id is not None else ""
+                                if admin_chat_str and chat_id_str:
+                                    skip_admin_edit = int(admin_chat_str) == int(chat_id_str)
+                                else:
+                                    skip_admin_edit = False
                             except Exception:
                                 skip_admin_edit = False
                     except Exception:
@@ -891,7 +920,7 @@ class WednesdayBot:
                 # Дополнительно защитимся от повторных отправок в жизненном цикле объекта
                 self._stop_message_sent = True
     
-    async def get_bot_info(self) -> dict:
+    async def get_bot_info(self) -> Dict[str, Any]:
         """
         Получает информацию о боте.
         

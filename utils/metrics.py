@@ -4,14 +4,15 @@
 import os
 import json
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import datetime
+from loguru import logger
 
 from utils.logger import get_logger
 
 
 class Metrics:
-    def __init__(self, storage_path: str | None = None):
+    def __init__(self, storage_path: Optional[str] = None) -> None:
         self.logger = get_logger(__name__)
         env_value = os.getenv("METRICS_STORAGE")
         if storage_path:

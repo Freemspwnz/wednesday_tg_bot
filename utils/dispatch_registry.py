@@ -5,13 +5,14 @@ import os
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from loguru import logger
 
 from utils.logger import get_logger
 
 
 class DispatchRegistry:
-    def __init__(self, storage_path: str | None = None, retention_days: int = 7):
+    def __init__(self, storage_path: Optional[str] = None, retention_days: int = 7) -> None:
         self.logger = get_logger(__name__)
         env_value = os.getenv("DISPATCH_REGISTRY_STORAGE")
         if storage_path:

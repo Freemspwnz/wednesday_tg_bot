@@ -1,27 +1,26 @@
-name: Python Tests
+name: CI/CD Workflow
 
 on:
   push:
-    branches: [ main, dev ]
+    branches: [main, dev]
   pull_request:
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
 
+  type-check:
+    uses: ./.github/workflows/setup-python.yml
+    with:
+      python-version: "3.11"
+    secrets: inherit
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - run: mypy .
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-
+  test:
+    uses: ./.github/workflows/setup-python.yml
+    with:
+      python-version: "3.11"
+    secrets: inherit
+    steps:
       - name: Run tests with coverage + junit
         run: |
           pytest \
@@ -33,7 +32,6 @@ jobs:
             --junitxml=junit.xml \
             -o junit_family=legacy
 
-      # Загружаем coverage report
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
@@ -41,7 +39,6 @@ jobs:
           files: ./coverage.xml
           fail_ci_if_error: true
 
-      # Загружаем результаты тестов
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
         uses: codecov/test-results-action@v1

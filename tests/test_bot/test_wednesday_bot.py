@@ -1,40 +1,41 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from typing import Any
 
 import pytest
 
 
 @pytest.fixture
-def wednesday_bot(monkeypatch):
+def wednesday_bot(monkeypatch: Any) -> Any:
     from bot import wednesday_bot as wb_module
 
     class DummyApplication:
-        def __init__(self):
-            self.added_handlers = []
+        def __init__(self) -> None:
+            self.added_handlers: list[Any] = []
             self.bot = SimpleNamespace(send_photo=AsyncMock(), send_message=AsyncMock())
-            self.bot_data = {}
+            self.bot_data: dict[str, Any] = {}
             self.updater = SimpleNamespace(stop=AsyncMock())
 
-        def add_handler(self, handler):
+        def add_handler(self, handler: Any) -> None:
             self.added_handlers.append(handler)
 
-    def builder_factory():
+    def builder_factory() -> Any:
         app_instance = DummyApplication()
 
         class Builder:
-            def __init__(self):
-                self._token = None
-                self._request = None
+            def __init__(self) -> None:
+                self._token: Any = None
+                self._request: Any = None
 
-            def token(self, token):
+            def token(self, token: str) -> 'Builder':
                 self._token = token
                 return self
 
-            def request(self, request):
+            def request(self, request: Any) -> 'Builder':
                 self._request = request
                 return self
 
-            def build(self):
+            def build(self) -> DummyApplication:
                 return app_instance
 
         return Builder()
@@ -43,60 +44,60 @@ def wednesday_bot(monkeypatch):
     monkeypatch.setattr(wb_module, "HTTPXRequest", lambda **kwargs: SimpleNamespace(**kwargs))
 
     class DummyImageGenerator:
-        def __init__(self):
-            self.saved = []
+        def __init__(self) -> None:
+            self.saved: list[Any] = []
 
-        async def generate_frog_image(self, metrics=None):
+        async def generate_frog_image(self, metrics: Any = None) -> tuple[bytes, str]:
             return b"img", "caption"
 
-        def save_image_locally(self, image_data, folder="data/frogs", prefix="wednesday"):
+        def save_image_locally(self, image_data: bytes, folder: str = "data/frogs", prefix: str = "wednesday") -> str:
             self.saved.append((image_data, folder, prefix))
             return "saved_path"
 
     class DummyScheduler:
-        def __init__(self):
-            self.send_times = ["10:00"]
+        def __init__(self) -> None:
+            self.send_times: list[str] = ["10:00"]
 
-        def get_next_run(self):
+        def get_next_run(self) -> Any:
             return None
 
     class DummyUsageTracker:
-        def __init__(self, *args, **kwargs):
-            self.total = 0
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.total: int = 0
 
-        def increment(self, value):
+        def increment(self, value: int) -> None:
             self.total += value
 
     class DummyChatsStore:
-        def __init__(self):
-            self.chat_ids = [111]
+        def __init__(self) -> None:
+            self.chat_ids: list[int] = [111]
 
-        def list_chat_ids(self):
+        def list_chat_ids(self) -> list[int]:
             return list(self.chat_ids)
 
     class DummyDispatchRegistry:
-        def __init__(self):
-            self.sent = set()
+        def __init__(self) -> None:
+            self.sent: set[Any] = set()
 
-        def is_dispatched(self, date, slot, chat_id):
+        def is_dispatched(self, date: str, slot: str, chat_id: int) -> bool:
             return (date, slot, chat_id) in self.sent
 
-        def mark_dispatched(self, date, slot, chat_id):
+        def mark_dispatched(self, date: str, slot: str, chat_id: int) -> None:
             self.sent.add((date, slot, chat_id))
 
     class DummyMetrics:
-        def __init__(self):
-            self.success = 0
-            self.failed = 0
+        def __init__(self) -> None:
+            self.success: int = 0
+            self.failed: int = 0
 
-        def increment_dispatch_success(self):
+        def increment_dispatch_success(self) -> None:
             self.success += 1
 
-        def increment_dispatch_failed(self):
+        def increment_dispatch_failed(self) -> None:
             self.failed += 1
 
     class DummyHandlers:
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             self.start_command = AsyncMock()
             self.help_command = AsyncMock()
             self.frog_command = AsyncMock()
@@ -118,19 +119,19 @@ def wednesday_bot(monkeypatch):
             self.unknown_command = AsyncMock()
 
     class DummyCommandHandler:
-        def __init__(self, command, callback):
+        def __init__(self, command: Any, callback: Any) -> None:
             self.command = command
             self.callback = callback
 
     class DummyMessageHandler:
-        def __init__(self, command_filter, callback):
+        def __init__(self, command_filter: Any, callback: Any) -> None:
             self.command_filter = command_filter
             self.callback = callback
 
     class DummyChatMemberHandler:
         MY_CHAT_MEMBER = object()
 
-        def __init__(self, callback, member_filter):
+        def __init__(self, callback: Any, member_filter: Any) -> None:
             self.callback = callback
             self.member_filter = member_filter
 
@@ -150,25 +151,25 @@ def wednesday_bot(monkeypatch):
     return bot
 
 
-def test_wednesday_bot_initializes_components(wednesday_bot):
+def test_wednesday_bot_initializes_components(wednesday_bot: Any) -> None:
     assert wednesday_bot.application is not None
     assert wednesday_bot.handlers is not None
     assert wednesday_bot.scheduler is not None
     assert wednesday_bot.is_running is False
 
 
-def test_setup_handlers_registers_all_callbacks(wednesday_bot):
+def test_setup_handlers_registers_all_callbacks(wednesday_bot: Any) -> None:
     wednesday_bot.setup_handlers()
     assert len(wednesday_bot.application.added_handlers) == 20
 
 
 @pytest.mark.asyncio
-async def test_send_wednesday_frog_dispatches_to_targets(monkeypatch, wednesday_bot):
+async def test_send_wednesday_frog_dispatches_to_targets(monkeypatch: Any, wednesday_bot: Any) -> None:
     wednesday_bot.chat_id = "222"
     wednesday_bot.chats.chat_ids = [111]
     wednesday_bot.scheduler.send_times = ["10:00"]
 
-    async def fake_generate(metrics=None):
+    async def fake_generate(metrics: Any = None) -> tuple[bytes, str]:
         return b"img", "caption"
 
     wednesday_bot.image_generator.generate_frog_image = AsyncMock(side_effect=fake_generate)
@@ -181,7 +182,7 @@ async def test_send_wednesday_frog_dispatches_to_targets(monkeypatch, wednesday_
 
 
 @pytest.mark.asyncio
-async def test_send_wednesday_frog_without_targets(monkeypatch, wednesday_bot):
+async def test_send_wednesday_frog_without_targets(monkeypatch: Any, wednesday_bot: Any) -> None:
     wednesday_bot.chat_id = None
     wednesday_bot.chats.chat_ids = []
     wednesday_bot._send_error_message = AsyncMock()
