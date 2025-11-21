@@ -14,6 +14,7 @@ from telegram.ext import ContextTypes
 
 from services.image_generator import ImageGenerator
 from utils.admins_store import AdminsStore
+from utils.config import config
 from utils.logger import get_logger, log_all_methods
 
 # Константы
@@ -1074,7 +1075,10 @@ class CommandHandlers:
         if not update.message or not update.effective_user:
             return
 
-        if not self.admins_store.is_admin(update.effective_user.id):
+        user_id = update.effective_user.id
+        self.logger.info(f"Получена команда /force_send от пользователя {user_id}")
+
+        if not self.admins_store.is_admin(user_id):
             try:
                 await self._retry_on_connect_error(
                     update.message.reply_text,
@@ -1086,22 +1090,274 @@ class CommandHandlers:
                 self.logger.error(f"Не удалось отправить сообщение об ограничении доступа после {3} попыток: {e}")
             return
 
-        try:
-            await self._retry_on_connect_error(
-                update.message.reply_text,
-                "🔄 Запускаю принудительную отправку...",
-                max_retries=3,
-                delay=2,
+        chats = context.application.bot_data.get("chats")
+        if not chats:
+            self.logger.warning("Хранилище чатов не настроено")
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Хранилище чатов не настроено",
+                    max_retries=3,
+                    delay=2,
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ошибке после {3} попыток: {e}")
+            return
+
+        chat_ids = chats.list_chat_ids()
+        if not chat_ids:
+            self.logger.info("Нет активных чатов")
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "📭 Нет активных чатов для отправки",
+                    max_retries=3,
+                    delay=2,
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение после {3} попыток: {e}")
+            return
+
+        # Если аргумент не передан - показываем список чатов
+        if not context.args or len(context.args) == 0:
+            # Получаем информацию о чатах
+            chat_list = []
+            for chat_id in chat_ids:
+                try:
+                    chat_info = await context.bot.get_chat(chat_id)
+                    title = getattr(chat_info, "title", getattr(chat_info, "first_name", "Unknown"))
+                    chat_list.append(f"• {title} (ID: {chat_id})")
+                except Exception as e:
+                    self.logger.warning(f"Не удалось получить информацию о чате {chat_id}: {e}")
+                    chat_list.append(f"• Чат {chat_id} (не удалось получить информацию)")
+
+            message = (
+                "📋 Активные чаты для отправки:\n\n"
+                + "\n".join(chat_list)
+                + "\n\n"
+                + "💡 Использование:\n"
+                + "• /force_send <chat_id> — отправить жабу в указанный чат\n"
+                + "• /force_send all — отправить жабу во все чаты"
             )
-            # Здесь можно добавить вызов send_wednesday_frog()
-            await self._retry_on_connect_error(
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    message,
+                    max_retries=3,
+                    delay=2,
+                )
+                self.logger.info(f"Отправлен список из {len(chat_ids)} активных чатов пользователю {user_id}")
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить список чатов после {3} попыток: {e}")
+            return
+
+        # Получаем аргумент
+        arg = context.args[0].strip().lower()
+
+        # Проверяем лимит генераций
+        usage = context.application.bot_data.get("usage")
+        can_generate = True
+        if usage:
+            can_generate = usage.can_use_frog()
+            if not can_generate:
+                total, threshold, quota = usage.get_limits_info()
+                self.logger.info(
+                    f"Лимит ручных генераций исчерпан: {total}/{quota}, порог: {threshold}",
+                )
+
+        # Определяем целевые чаты
+        target_chat_ids: list[int] = []
+        if arg == "all":
+            target_chat_ids = list(chat_ids)
+        else:
+            try:
+                requested_chat_id = int(arg)
+                if requested_chat_id in chat_ids:
+                    target_chat_ids = [requested_chat_id]
+                else:
+                    try:
+                        await self._retry_on_connect_error(
+                            update.message.reply_text,
+                            f"❌ Чат {requested_chat_id} не найден в списке активных чатов",
+                            max_retries=3,
+                            delay=2,
+                        )
+                    except Exception as e:
+                        self.logger.error(f"Не удалось отправить сообщение об ошибке после {3} попыток: {e}")
+                    return
+            except ValueError:
+                try:
+                    await self._retry_on_connect_error(
+                        update.message.reply_text,
+                        "❌ Неверный аргумент. Используйте: /force_send <chat_id> или /force_send all",
+                        max_retries=3,
+                        delay=2,
+                    )
+                except Exception as e:
+                    self.logger.error(f"Не удалось отправить сообщение об ошибке после {3} попыток: {e}")
+                return
+
+        if not target_chat_ids:
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Нет целевых чатов для отправки",
+                    max_retries=3,
+                    delay=2,
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ошибке после {3} попыток: {e}")
+            return
+
+        # Отправляем статусное сообщение
+        try:
+            status_msg = await self._retry_on_connect_error(
                 update.message.reply_text,
-                "✅ Отправка выполнена",
+                f"🔄 Генерирую и отправляю жабу в {len(target_chat_ids)} чат(ов)...",
                 max_retries=3,
                 delay=2,
             )
         except Exception as e:
-            self.logger.error(f"Ошибка при выполнении команды force_send после {3} попыток: {e}")
+            self.logger.error(f"Не удалось отправить статусное сообщение после {3} попыток: {e}")
+            status_msg = None
+
+        # Генерируем или получаем изображение
+        image_data: bytes | None = None
+        caption: str = ""
+        use_fallback = False
+
+        if can_generate:
+            try:
+                result = await self.image_generator.generate_frog_image()
+                if result:
+                    image_data, caption = result
+                    # Сохраняем изображение локально
+                    try:
+                        saved_path = self.image_generator.save_image_locally(
+                            image_data,
+                            folder="data/frogs",
+                            prefix="frog",
+                        )
+                        if saved_path:
+                            self.logger.info(f"Изображение сохранено локально: {saved_path}")
+                    except Exception:
+                        pass
+                    # Увеличиваем счетчик использования
+                    if usage:
+                        usage.increment(1)
+                else:
+                    use_fallback = True
+                    self.logger.warning("Генерация изображения вернула None, используем fallback")
+            except Exception as e:
+                self.logger.error(f"Ошибка при генерации изображения: {e}", exc_info=True)
+                use_fallback = True
+        else:
+            use_fallback = True
+            self.logger.info("Лимит генераций исчерпан, используем fallback")
+
+        # Если нужно использовать fallback
+        if use_fallback:
+            fallback_image = self.image_generator.get_random_saved_image()
+            if fallback_image:
+                image_data, caption = fallback_image
+                self.logger.info("Используется случайное изображение из архива")
+            else:
+                self.logger.warning("Нет сохраненных изображений для отправки")
+                try:
+                    await self._retry_on_connect_error(
+                        update.message.reply_text,
+                        "❌ Не удалось получить изображение (лимит исчерпан и нет сохраненных изображений)",
+                        max_retries=3,
+                        delay=2,
+                    )
+                except Exception as e:
+                    self.logger.error(f"Не удалось отправить сообщение об ошибке после {3} попыток: {e}")
+                if status_msg:
+                    try:
+                        await status_msg.delete()
+                    except Exception:
+                        pass
+                return
+
+        if not image_data:
+            self.logger.error("Не удалось получить изображение для отправки")
+            try:
+                await self._retry_on_connect_error(
+                    update.message.reply_text,
+                    "❌ Не удалось получить изображение для отправки",
+                    max_retries=3,
+                    delay=2,
+                )
+            except Exception as e:
+                self.logger.error(f"Не удалось отправить сообщение об ошибке после {3} попыток: {e}")
+            if status_msg:
+                try:
+                    await status_msg.delete()
+                except Exception:
+                    pass
+            return
+
+        # Отправляем изображение главному админу
+        admin_chat_id = config.admin_chat_id
+        if admin_chat_id:
+            try:
+                admin_id = int(admin_chat_id)
+                await self._retry_on_connect_error(
+                    context.bot.send_photo,
+                    chat_id=admin_id,
+                    photo=image_data,
+                    caption=f"🐸 Принудительная отправка (команда /force_send)\n\n{caption}",
+                    max_retries=3,
+                    delay=2,
+                )
+                self.logger.info(f"Изображение отправлено главному админу {admin_id}")
+            except (ValueError, TypeError) as e:
+                self.logger.warning(f"Неверный формат admin_chat_id: {e}")
+            except Exception as e:
+                self.logger.warning(f"Не удалось отправить изображение главному админу: {e}")
+
+        # Отправляем изображение в целевые чаты
+        success_count = 0
+        failed_count = 0
+        for target_chat_id in target_chat_ids:
+            try:
+                await self._retry_on_connect_error(
+                    context.bot.send_photo,
+                    chat_id=target_chat_id,
+                    photo=image_data,
+                    caption=caption,
+                    max_retries=3,
+                    delay=2,
+                )
+                success_count += 1
+                self.logger.info(f"Изображение отправлено в чат {target_chat_id}")
+            except Exception as e:
+                failed_count += 1
+                self.logger.warning(f"Не удалось отправить изображение в чат {target_chat_id}: {e}")
+
+        # Удаляем статусное сообщение и отправляем итоговое
+        if status_msg:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+
+        result_message = (
+            f"✅ Отправка выполнена:\n"
+            f"• Успешно: {success_count}/{len(target_chat_ids)}\n"
+            f"• Ошибок: {failed_count}\n"
+            f"• Использован: {'fallback (лимит исчерпан)' if use_fallback else 'новая генерация'}"
+        )
+        try:
+            await self._retry_on_connect_error(
+                update.message.reply_text,
+                result_message,
+                max_retries=3,
+                delay=2,
+            )
+            self.logger.info(f"Команда /force_send выполнена: {success_count} успешных отправок")
+        except Exception as e:
+            self.logger.error(f"Не удалось отправить итоговое сообщение после {3} попыток: {e}")
 
     async def admin_add_chat_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin команда: добавить чат в рассылку."""
