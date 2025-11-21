@@ -3,51 +3,58 @@
 """
 
 import asyncio
-import os
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Awaitable, Callable, Optional, List, Dict, Any
+from typing import Any
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.error import NetworkError as _TNetworkError, TimedOut as _TTimedOut
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
-from telegram.error import TimedOut as _TTimedOut, NetworkError as _TNetworkError
-from loguru import logger
 
-from utils.logger import get_logger
-from utils.config import config
+# Константы для магических чисел (импортируем из wednesday_bot для консистентности)
+from bot.wednesday_bot import (
+    CONNECT_TIMEOUT_SECONDS,
+    CONNECTION_POOL_SIZE,
+    POOL_TIMEOUT_SECONDS,
+    READ_TIMEOUT_SECONDS,
+)
 from utils.admins_store import AdminsStore
+from utils.config import config
+from utils.logger import get_logger, log_all_methods
+
+# Константы для SupportBot
+MAX_POLLING_ATTEMPTS = 4  # максимальное количество попыток запуска polling
+LAST_POLLING_ATTEMPT_INDEX = 3  # индекс последней попытки (0-based: 3 = 4-я попытка)
+MAX_LOG_DAYS_SUPPORT = 10  # максимальное количество дней для команды /log в SupportBot
 
 
+@log_all_methods()
 class SupportBot:
     """
     Бот-поддержка: показывает сообщение о техработах, отдает логи и умеет запускать основной бот.
     Никогда не должен работать одновременно с основным ботом.
     """
 
-    def __init__(self, request_start_main: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None) -> None:
+    def __init__(self, request_start_main: Callable[[dict[str, Any]], Awaitable[None]] | None = None) -> None:
         self.logger = get_logger(__name__)
         request: HTTPXRequest = HTTPXRequest(
-            connection_pool_size=20,
-            pool_timeout=5.0,
-            read_timeout=20.0,
-            connect_timeout=15.0,
+            connection_pool_size=CONNECTION_POOL_SIZE,
+            pool_timeout=POOL_TIMEOUT_SECONDS,
+            read_timeout=READ_TIMEOUT_SECONDS,
+            connect_timeout=CONNECT_TIMEOUT_SECONDS,
         )
         # config.telegram_token проверяется в _validate_required_vars, поэтому не может быть None
         telegram_token: str = config.telegram_token or ""
         assert telegram_token, "TELEGRAM_BOT_TOKEN должен быть установлен"
-        self.application: Application = (
-            Application.builder()
-            .token(telegram_token)
-            .request(request)
-            .build()
-        )
+        self.application: Application = Application.builder().token(telegram_token).request(request).build()
         self.admins: AdminsStore = AdminsStore()
-        self.request_start_main: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = request_start_main
+        self.request_start_main: Callable[[dict[str, Any]], Awaitable[None]] | None = request_start_main
         self.is_running: bool = False
         # Данные для редактирования сообщения об остановке основного
-        self.pending_shutdown_edit: Optional[Dict[str, Any]] = None
+        self.pending_shutdown_edit: dict[str, Any] | None = None
         # Данные для цепочки запуска основного: сообщение "Запускаю..."
-        self.pending_startup_edit: Optional[Dict[str, Any]] = None
+        self.pending_startup_edit: dict[str, Any] | None = None
 
     def setup_handlers(self) -> None:
         self.application.add_handler(CommandHandler("start", self.start_main_command))
@@ -78,7 +85,9 @@ class SupportBot:
                     self.logger.warning(f"SupportBot warmup get_me() не удался: {warmup_err}")
                 break
             except (_TTimedOut, _TNetworkError) as e:
-                self.logger.warning(f"SupportBot: сеть недоступна при initialize (попытка {attempt}/{init_attempts}): {e}")
+                self.logger.warning(
+                    f"SupportBot: сеть недоступна при initialize (попытка {attempt}/{init_attempts}): {e}",
+                )
                 if attempt == init_attempts:
                     raise
                 await asyncio.sleep(backoff)
@@ -111,7 +120,9 @@ class SupportBot:
                         except Exception:
                             pass
                     except Exception as reinit_err:
-                        self.logger.warning(f"SupportBot: не удалось повторно инициализировать приложение: {reinit_err}")
+                        self.logger.warning(
+                            f"SupportBot: не удалось повторно инициализировать приложение: {reinit_err}",
+                        )
                     # Ретраим без немедленного падения
                     if attempt == start_attempts:
                         raise
@@ -121,7 +132,9 @@ class SupportBot:
                     raise
         # Безопасный запуск polling с ретраями на случай конфликта getUpdates
         import asyncio as _asyncio
+
         from telegram.error import Conflict as _TGConflict
+
         delay = 2.0
         for attempt in range(4):
             try:
@@ -131,8 +144,8 @@ class SupportBot:
                 self.logger.info("SupportBot polling запущен")
                 break
             except _TGConflict as e:
-                self.logger.warning(f"Conflict при запуске polling SupportBot (попытка {attempt+1}/4): {e}")
-                if attempt == 3:
+                self.logger.warning(f"Conflict при запуске polling SupportBot (попытка {attempt + 1}/4): {e}")
+                if attempt == LAST_POLLING_ATTEMPT_INDEX:
                     raise
                 await _asyncio.sleep(delay)
                 delay *= 1.5
@@ -146,7 +159,8 @@ class SupportBot:
                 skip_admin_edit = False
                 try:
                     from utils.config import config as _cfg
-                    admin_chat_id_env = getattr(_cfg, 'admin_chat_id', None)
+
+                    admin_chat_id_env = getattr(_cfg, "admin_chat_id", None)
                     if admin_chat_id_env:
                         try:
                             skip_admin_edit = int(str(admin_chat_id_env)) == int(str(chat_id))
@@ -157,15 +171,12 @@ class SupportBot:
 
                 if chat_id and message_id and not skip_admin_edit:
                     # Компактный финальный текст для не-админ чатов
-                    final_text = (
-                        "🛑  Wednesday Frog Bot остановлен\n"
-                        "✅ Резервный бот запущен"
-                    )
+                    final_text = "🛑  Wednesday Frog Bot остановлен\n✅ Резервный бот запущен"
                     try:
                         await self.application.bot.edit_message_text(
                             chat_id=chat_id,
                             message_id=message_id,
-                            text=final_text
+                            text=final_text,
                         )
                         self.logger.info("Сообщение об остановке обновлено в чате-источнике")
                     except Exception as edit_err:
@@ -175,9 +186,8 @@ class SupportBot:
                             self.logger.debug("Сообщение уже имеет нужный текст, пропускаем редактирование")
                         else:
                             self.logger.warning(f"Не удалось обновить сообщение об остановке: {edit_err}")
-                else:
-                    if chat_id and skip_admin_edit:
-                        self.logger.info("SupportBot: пропускаю редактирование статусного сообщения в админском чате")
+                elif chat_id and skip_admin_edit:
+                    self.logger.info("SupportBot: пропускаю редактирование статусного сообщения в админском чате")
         except Exception as e:
             self.logger.warning(f"Не удалось обновить сообщение об остановке: {e}")
 
@@ -191,7 +201,7 @@ class SupportBot:
                         text=(
                             "🟢 SupportBot запущен и принимает команды.\n"
                             "• /help — справка\n• /log — последний лог\n• /start — запустить основной бот"
-                        )
+                        ),
                     )
                 except Exception:
                     pass
@@ -219,7 +229,8 @@ class SupportBot:
                 is_admin_chat = False
                 try:
                     from utils.config import config as _cfg
-                    admin_chat_id_env = getattr(_cfg, 'admin_chat_id', None)
+
+                    admin_chat_id_env = getattr(_cfg, "admin_chat_id", None)
                     if admin_chat_id_env and chat_id is not None:
                         try:
                             is_admin_chat = int(str(admin_chat_id_env)) == int(str(chat_id))
@@ -228,15 +239,12 @@ class SupportBot:
                 except Exception:
                     is_admin_chat = False
                 if chat_id and message_id and not is_admin_chat:
-                    interim_text = (
-                        "🚀 Запускаю основной бот...\n"
-                        "🛑 Support Bot остановлен"
-                    )
+                    interim_text = "🚀 Запускаю основной бот...\n🛑 Support Bot остановлен"
                     try:
                         await self.application.bot.edit_message_text(
                             chat_id=chat_id,
                             message_id=message_id,
-                            text=interim_text
+                            text=interim_text,
                         )
                     except Exception:
                         pass
@@ -246,7 +254,7 @@ class SupportBot:
             pass
         # Сначала останавливаем polling, чтобы освободить соединения
         try:
-            if hasattr(self.application, 'updater') and self.application.updater:
+            if hasattr(self.application, "updater") and self.application.updater:
                 await self.application.updater.stop()
         except Exception as e:
             self.logger.warning(f"Ошибка при остановке updater'а SupportBot: {e}")
@@ -266,7 +274,7 @@ class SupportBot:
                             text=(
                                 "🛑 SupportBot остановлен.\n\n"
                                 "Если это не плановая остановка, проверьте логи и состояние основного бота."
-                            )
+                            ),
                         )
                     except Exception:
                         pass
@@ -281,7 +289,7 @@ class SupportBot:
         """Ответ на любые неизвестные команды: сообщение о техработах."""
         if not update.message:
             return
-        
+
         try:
             user_id = update.effective_user.id if update and update.effective_user else None
             chat_id = update.effective_chat.id if update and update.effective_chat else None
@@ -291,8 +299,7 @@ class SupportBot:
             pass
         try:
             await update.message.reply_text(
-                "🛠 Технические работы. Основной бот временно недоступен. \n"
-                "Пожалуйста, попробуйте позже."
+                "🛠 Технические работы. Основной бот временно недоступен. \nПожалуйста, попробуйте позже.",
             )
         except Exception as e:
             self.logger.warning(f"Не удалось отправить сообщение о техработах: {e}")
@@ -305,7 +312,7 @@ class SupportBot:
         """Отправляет логи. Использование: /log [count] (1..10). Без аргумента — последний файл."""
         if not update.message or not update.effective_user or not update.effective_chat:
             return
-        
+
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
         self.logger.info(f"SupportBot /log от user_id={user_id}, chat_id={chat_id}")
@@ -325,17 +332,20 @@ class SupportBot:
             if context.args and len(context.args) > 0:
                 raw = context.args[0]
                 if not raw.isdigit():
-                    await update.message.reply_text("❌ Неверный аргумент. Используйте: /log [count], где count — число 1..10")
+                    await update.message.reply_text(
+                        "❌ Неверный аргумент. Используйте: /log [count], где count — число 1..10",
+                    )
                     return
                 count = int(raw)
-                if count > 10:
-                    count = 10
-                    capped_note = "(ограничено максимумом 10 дней)"
+                if count > MAX_LOG_DAYS_SUPPORT:
+                    count = MAX_LOG_DAYS_SUPPORT
+                    capped_note = f"(ограничено максимумом {MAX_LOG_DAYS_SUPPORT} дней)"
 
             # Выбираем файлы по датам
             from datetime import datetime, timedelta
-            wanted_dates = [(datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(count)]
-            selected: List[Path] = []
+
+            wanted_dates = [(datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(count)]
+            selected: list[Path] = []
             for ds in wanted_dates:
                 log_path = logs_dir / f"wednesday_bot_{ds}.log"
                 zip_path = logs_dir / f"wednesday_bot_{ds}.log.zip"
@@ -345,7 +355,8 @@ class SupportBot:
                     selected.append(zip_path)
 
             if not selected:
-                selected = sorted([p for p in logs_dir.iterdir() if p.is_file()], key=lambda p: p.stat().st_mtime, reverse=True)[:1]
+                log_files = [p for p in logs_dir.iterdir() if p.is_file()]
+                selected = sorted(log_files, key=lambda p: p.stat().st_mtime, reverse=True)[:1]
 
             if not selected:
                 await update.message.reply_text("📭 Нет логов для отправки")
@@ -372,7 +383,7 @@ class SupportBot:
         """Команда /start от админа — запускает основной бот и выключает SupportBot."""
         if not update.message or not update.effective_user or not update.effective_chat:
             return
-        
+
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
         self.logger.info(f"SupportBot /start от user_id={user_id}, chat_id={chat_id}")
@@ -384,7 +395,8 @@ class SupportBot:
         is_admin_chat = False
         try:
             from utils.config import config as _cfg
-            admin_chat_id_env = getattr(_cfg, 'admin_chat_id', None)
+
+            admin_chat_id_env = getattr(_cfg, "admin_chat_id", None)
             if admin_chat_id_env and chat_id is not None:
                 try:
                     is_admin_chat = int(str(admin_chat_id_env)) == int(str(chat_id))
@@ -430,7 +442,7 @@ class SupportBot:
         """Команда /help (только для админа): справка по резервному боту."""
         if not update.message or not update.effective_user or not update.effective_chat:
             return
-        
+
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
         self.logger.info(f"SupportBot /help от user_id={user_id}, chat_id={chat_id}")
@@ -449,4 +461,3 @@ class SupportBot:
             await update.message.reply_text(help_text)
         except Exception as e:
             self.logger.warning(f"Ошибка при отправке help: {e}")
-

@@ -1,0 +1,107 @@
+[build-system]
+requires = ["setuptools>=67", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wednesday-tg-bot"
+version = "5.0.0"
+description = "Telegram-бот Wednesday Frog с расширенной автоматизацией и проверками качества кода."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Wednesday Frog Team" }]
+license = { file = "LICENSE" }
+dependencies = []
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = [
+  ".venv",
+  "build",
+  "dist",
+  "__pycache__",
+  "tests/conftest.py",
+]
+fix = true
+unsafe-fixes = false
+
+[tool.ruff.lint]
+select = [
+  "E",
+  "F",
+  "W",
+  "B",
+  "C4",
+  "I",
+  "ANN",
+  "UP",
+  "RUF",
+  "PLE",
+  "PLR",
+  "PLW",
+  "COM",
+]
+ignore = [
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    "W293",
+    "PLR0912",  # Too many branches (сложные функции обработчиков)
+    "PLR0915",  # Too many statements (сложные функции обработчиков)
+    "PLR0914",  # Too many local variables (сложные функции обработчиков)
+    "PLR1702",  # Too many nested blocks (сложные функции обработчиков)
+    "PLR0911",  # Too many return statements (нормально для обработки ошибок)
+    "COM812",
+    "TID252",
+    "RUF015",
+]
+fixable = ["ALL"]
+unfixable = ["B", "RUF"]  # запрет на refactor фиксы
+preview = true
+
+[tool.ruff.lint.isort]
+known-first-party = ["bot", "services", "utils", "tests"]
+combine-as-imports = true
+
+[tool.ruff.format]
+preview = true
+quote-style = "preserve"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+check_untyped_defs = false
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "tests.conftest"
+disallow_untyped_defs = false
+check_untyped_defs = false
+ignore_errors = true
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["ANN401", "PLR6301"]
+"tests/conftest.py" = ["ANN401", "PLR6301"]
+
+[tool.pytest.ini_options]
+addopts = "-v -ra --tb=short"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+pythonpath = ["."]
+

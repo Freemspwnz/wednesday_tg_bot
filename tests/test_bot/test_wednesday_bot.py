@@ -1,8 +1,12 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
+
+# Константы для тестов
+EXPECTED_SEND_COUNT = 2
+EXPECTED_HANDLERS_COUNT = 20
 
 
 @pytest.fixture
@@ -27,11 +31,11 @@ def wednesday_bot(monkeypatch: Any) -> Any:
                 self._token: Any = None
                 self._request: Any = None
 
-            def token(self, token: str) -> 'Builder':
+            def token(self, token: str) -> "Builder":
                 self._token = token
                 return self
 
-            def request(self, request: Any) -> 'Builder':
+            def request(self, request: Any) -> "Builder":
                 self._request = request
                 return self
 
@@ -40,8 +44,15 @@ def wednesday_bot(monkeypatch: Any) -> Any:
 
         return Builder()
 
-    monkeypatch.setattr(wb_module, "Application", SimpleNamespace(builder=lambda: builder_factory()))
-    monkeypatch.setattr(wb_module, "HTTPXRequest", lambda **kwargs: SimpleNamespace(**kwargs))
+    def app_builder() -> Any:
+        return builder_factory()
+
+    monkeypatch.setattr(wb_module, "Application", SimpleNamespace(builder=app_builder))
+
+    def http_request(**kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(**kwargs)
+
+    monkeypatch.setattr(wb_module, "HTTPXRequest", http_request)
 
     class DummyImageGenerator:
         def __init__(self) -> None:
@@ -160,7 +171,7 @@ def test_wednesday_bot_initializes_components(wednesday_bot: Any) -> None:
 
 def test_setup_handlers_registers_all_callbacks(wednesday_bot: Any) -> None:
     wednesday_bot.setup_handlers()
-    assert len(wednesday_bot.application.added_handlers) == 20
+    assert len(wednesday_bot.application.added_handlers) == EXPECTED_HANDLERS_COUNT
 
 
 @pytest.mark.asyncio
@@ -169,16 +180,16 @@ async def test_send_wednesday_frog_dispatches_to_targets(monkeypatch: Any, wedne
     wednesday_bot.chats.chat_ids = [111]
     wednesday_bot.scheduler.send_times = ["10:00"]
 
-    async def fake_generate(metrics: Any = None) -> tuple[bytes, str]:
+    def fake_generate(metrics: Any = None) -> tuple[bytes, str]:
         return b"img", "caption"
 
     wednesday_bot.image_generator.generate_frog_image = AsyncMock(side_effect=fake_generate)
 
     await wednesday_bot.send_wednesday_frog(slot_time="10:00")
 
-    assert wednesday_bot.application.bot.send_photo.await_count == 2
-    assert wednesday_bot.usage.total == 2
-    assert wednesday_bot.metrics.success == 2
+    assert wednesday_bot.application.bot.send_photo.await_count == EXPECTED_SEND_COUNT
+    assert wednesday_bot.usage.total == EXPECTED_SEND_COUNT
+    assert wednesday_bot.metrics.success == EXPECTED_SEND_COUNT
 
 
 @pytest.mark.asyncio
@@ -191,4 +202,3 @@ async def test_send_wednesday_frog_without_targets(monkeypatch: Any, wednesday_b
 
     wednesday_bot._send_error_message.assert_awaited_once()
     assert wednesday_bot.application.bot.send_photo.await_count == 0
-

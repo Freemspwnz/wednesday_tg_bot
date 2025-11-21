@@ -1,6 +1,6 @@
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
-from typing import Any, Union
 
 import pytest
 
@@ -35,7 +35,7 @@ async def test_help_command_replies(fake_update: Any, fake_context: Any, async_r
 async def test_start_command_handles_retry_failure(fake_update: Any, fake_context: Any, monkeypatch: Any) -> None:
     handler = CommandHandlers(image_generator=MagicMock(), next_run_provider=None)
 
-    async def failing_retry(func: Any, *args: Any, **kwargs: Any) -> Any:
+    def failing_retry(func: Any, *args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("boom")
 
     fake_logger = MagicMock()
@@ -104,7 +104,12 @@ async def test_set_frog_limit_command_invalid(fake_update: Any, fake_context: An
 
 
 @pytest.mark.asyncio
-async def test_frog_command_success(fake_update: Any, fake_context: Any, async_retry_stub: Any, monkeypatch: Any) -> None:
+async def test_frog_command_success(
+    fake_update: Any,
+    fake_context: Any,
+    async_retry_stub: Any,
+    monkeypatch: Any,
+) -> None:
     class DummyGenerator:
         def __init__(self) -> None:
             self.generate_frog_image = AsyncMock(return_value=(b"image", "caption"))
@@ -173,4 +178,3 @@ async def test_frog_command_usage_limit(fake_update: Any, fake_context: Any, asy
     message = call.kwargs.get("text", call.args[0])
     assert "Лимит ручных генераций" in message
     assert fake_update.message.reply_photo.await_count == 0
-

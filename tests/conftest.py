@@ -1,8 +1,9 @@
 import importlib
 import os
 import sys
+from collections.abc import Callable, Generator
 from types import SimpleNamespace
-from typing import Callable, Optional, Any, Dict, Generator
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -32,16 +33,16 @@ class _InMemoryModelsStore:
     """Простое хранилище моделей для тестов без файловой системы."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        self._gigachat_model: Optional[str] = None
+        self._gigachat_model: str | None = None
         self._gigachat_available: list[str] = []
-        self._kandinsky_model: tuple[Optional[str], Optional[str]] = (None, None)
+        self._kandinsky_model: tuple[str | None, str | None] = (None, None)
         self._kandinsky_available: list[str] = []
 
     # GigaChat
     def set_gigachat_model(self, model_name: str) -> None:
         self._gigachat_model = model_name
 
-    def get_gigachat_model(self) -> Optional[str]:
+    def get_gigachat_model(self) -> str | None:
         return self._gigachat_model
 
     def set_gigachat_available_models(self, models: list[str]) -> None:
@@ -54,7 +55,7 @@ class _InMemoryModelsStore:
     def set_kandinsky_model(self, pipeline_id: str, pipeline_name: str) -> None:
         self._kandinsky_model = (pipeline_id, pipeline_name)
 
-    def get_kandinsky_model(self) -> tuple[Optional[str], Optional[str]]:
+    def get_kandinsky_model(self) -> tuple[str | None, str | None]:
         return self._kandinsky_model
 
     def set_kandinsky_available_models(self, models: list[Any] | list[str]) -> None:
@@ -86,19 +87,22 @@ def base_env(monkeypatch: Any, tmp_path_factory: Any) -> Generator[None, None, N
 @pytest.fixture(autouse=True)
 def patch_models_store(monkeypatch: Any) -> Generator[None, None, None]:
     """Подменяет ModelsStore на простую in-memory реализацию."""
-    import utils.models_store as models_store_module
     import utils.admins_store as admins_store_module
+    import utils.models_store as models_store_module
 
     monkeypatch.setattr(models_store_module, "ModelsStore", _InMemoryModelsStore)
     # Создаём совместимый с AdminsStore объект для тестов
+
     class _TestAdminsStore:
         def is_admin(self, user_id: int) -> bool:
             return False
+
         def list_admins(self) -> list[int]:
             return []
+
         def list_all_admins(self) -> list[int]:
             return []
-    
+
     monkeypatch.setattr(admins_store_module, "AdminsStore", lambda *args, **kwargs: _TestAdminsStore())
     yield
 
@@ -110,6 +114,15 @@ def patch_gigachat_client(monkeypatch: Any) -> Generator[None, None, None]:
     class _DummyGigaChatClient:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             self._prompt: str = "dummy prompt"
+
+        @staticmethod
+        def _clean_prompt(prompt: str | None = None) -> str:
+            if not prompt:
+                return "Wednesday Frog prompt"
+            cleaned = prompt.replace("```", "")
+            cleaned = cleaned.replace("Prompt:", "").replace("prompt:", "").replace("Промпт:", "")
+            cleaned = cleaned.strip("\"'")
+            return ' '.join(cleaned.split()).strip()
 
         def test_connection(self) -> bool:
             return False
@@ -168,7 +181,7 @@ def fake_context() -> Any:
     """Создает минимальный контекст Telegram с AsyncMock ботом."""
     class _App:
         def __init__(self) -> None:
-            self.bot_data: Dict[str, Any] = {"bot": SimpleNamespace(stop=AsyncMock())}
+            self.bot_data: dict[str, Any] = {"bot": SimpleNamespace(stop=AsyncMock())}
             self.updater = SimpleNamespace(stop=AsyncMock())
 
         async def stop(self) -> None:
@@ -198,4 +211,3 @@ def async_retry_stub(monkeypatch: Any) -> Callable[[Any], None]:
         monkeypatch.setattr(target, "_retry_on_connect_error", _direct)
 
     return _apply
-

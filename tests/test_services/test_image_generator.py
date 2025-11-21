@@ -1,8 +1,6 @@
-import asyncio
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
-from typing import Any, Optional
 
 import aiohttp
 import pytest
@@ -19,7 +17,7 @@ async def test_check_api_status_dry_run(monkeypatch: Any) -> None:
             self.status = status
             self._payload: Any = payload or [{"id": "p1", "name": "Model One"}]
 
-        async def __aenter__(self) -> 'DummyResponse':
+        async def __aenter__(self) -> "DummyResponse":
             return self
 
         async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
@@ -29,7 +27,7 @@ async def test_check_api_status_dry_run(monkeypatch: Any) -> None:
             return self._payload
 
     class DummySession:
-        async def __aenter__(self) -> 'DummySession':
+        async def __aenter__(self) -> "DummySession":
             return self
 
         async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
@@ -78,10 +76,10 @@ async def test_generate_frog_image_success(monkeypatch: Any) -> None:
     generator = ImageGenerator()
     generator.gigachat_enabled = False
 
-    async def fake_generate_prompt() -> str:
+    def fake_generate_prompt() -> str:
         return "frog prompt"
 
-    async def fake_generate_image(prompt: str) -> bytes:
+    def fake_generate_image(prompt: str) -> bytes:
         return b"img"
 
     monkeypatch.setattr(generator, "_generate_prompt", AsyncMock(side_effect=fake_generate_prompt))
@@ -107,4 +105,3 @@ async def test_generate_frog_image_network_error(monkeypatch: Any) -> None:
     result = await generator.generate_frog_image()
 
     assert result is None
-

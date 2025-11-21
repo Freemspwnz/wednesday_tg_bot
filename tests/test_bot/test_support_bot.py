@@ -1,6 +1,6 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -23,11 +23,11 @@ def support_bot(monkeypatch: Any) -> Any:
         app_instance = DummyApplication()
 
         class Builder:
-            def token(self, token: str) -> 'Builder':
+            def token(self, token: str) -> "Builder":
                 self._token = token
                 return self
 
-            def request(self, request: Any) -> 'Builder':
+            def request(self, request: Any) -> "Builder":
                 self._request = request
                 return self
 
@@ -36,8 +36,15 @@ def support_bot(monkeypatch: Any) -> Any:
 
         return Builder()
 
-    monkeypatch.setattr(sb_module, "Application", SimpleNamespace(builder=lambda: builder_factory()))
-    monkeypatch.setattr(sb_module, "HTTPXRequest", lambda **kwargs: SimpleNamespace(**kwargs))
+    def app_builder() -> Any:
+        return builder_factory()
+
+    monkeypatch.setattr(sb_module, "Application", SimpleNamespace(builder=app_builder))
+
+    def http_request(**kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(**kwargs)
+
+    monkeypatch.setattr(sb_module, "HTTPXRequest", http_request)
 
     class DummyAdminsStore:
         def __init__(self) -> None:
@@ -89,7 +96,8 @@ def _make_context(args: Any = None) -> Any:
 
 def test_support_bot_setup_handlers(support_bot: Any) -> None:
     support_bot.setup_handlers()
-    assert len(support_bot.application.added_handlers) == 4
+    EXPECTED_HANDLERS_COUNT = 4
+    assert len(support_bot.application.added_handlers) == EXPECTED_HANDLERS_COUNT
 
 
 @pytest.mark.asyncio
@@ -143,4 +151,3 @@ async def test_log_command_no_logs_directory(monkeypatch: Any, support_bot: Any)
         elif call.args:
             messages.append(call.args[0])
     assert any("папка logs пуста" in msg.lower() for msg in messages)
-

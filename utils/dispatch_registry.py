@@ -1,18 +1,19 @@
 """
 Реестр отправленных сообщений по тайм-слотам и чатам.
 """
-import os
+
 import json
-from pathlib import Path
+import os
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
-from loguru import logger
+from pathlib import Path
+from typing import Any
 
-from utils.logger import get_logger
+from utils.logger import get_logger, log_all_methods
 
 
+@log_all_methods()
 class DispatchRegistry:
-    def __init__(self, storage_path: Optional[str] = None, retention_days: int = 7) -> None:
+    def __init__(self, storage_path: str | None = None, retention_days: int = 7) -> None:
         self.logger = get_logger(__name__)
         env_value = os.getenv("DISPATCH_REGISTRY_STORAGE")
         if storage_path:
@@ -23,9 +24,9 @@ class DispatchRegistry:
         else:
             resolved = Path("data") / "dispatch_registry.json"
         self.path = resolved
-        if self.path.parent and str(self.path.parent) not in ("", "."):
+        if self.path.parent and str(self.path.parent) not in {"", "."}:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._data: Dict[str, Any] = {}
+        self._data: dict[str, Any] = {}
         self.retention_days = retention_days
         self._load()
         self._cleanup_old()
@@ -49,7 +50,7 @@ class DispatchRegistry:
     def _cleanup_old(self) -> None:
         cutoff = (datetime.utcnow() - timedelta(days=self.retention_days)).strftime("%Y-%m-%d_%H:%M")
         dispatches = self._data.get("dispatches", {})
-        updated = {k: v for k, v in dispatches.items() if k.split(':')[0] >= cutoff}
+        updated = {k: v for k, v in dispatches.items() if k.split(":")[0] >= cutoff}
         self._data["dispatches"] = updated
         self._save()
 

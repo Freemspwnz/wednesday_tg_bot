@@ -21,13 +21,19 @@ jobs:
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+  # --- LINTING WITH RUFF ---
+  lint-check:
+    uses: ./.github/workflows/lint-check.yml
+    with:
+      python-version: "3.11"
+  
+  # --- FORMATTING WITH RUFF ---
+  format-check:
+    uses: ./.github/workflows/format-check.yml
+    with:
+      python-version: "3.11"
+
   # В будущем можно добавить:
-  #
-  # black-check:
-  #   uses: ./.github/workflows/black-check.yml
-  #
-  # lint-check:
-  #   uses: ./.github/workflows/lint-check.yml
   #
   # docker-build:
   #   uses: ./.github/workflows/docker-build.yml

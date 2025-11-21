@@ -2,17 +2,17 @@
 Хранилище чатов с JSON-персистом.
 """
 
-import os
 import json
+import os
 from pathlib import Path
-from typing import Dict, Any, List, Optional
-from loguru import logger
+from typing import Any
 
-from utils.logger import get_logger
+from utils.logger import get_logger, log_all_methods
 
 
+@log_all_methods()
 class ChatsStore:
-    def __init__(self, storage_path: Optional[str] = None) -> None:
+    def __init__(self, storage_path: str | None = None) -> None:
         self.logger = get_logger(__name__)
         # Разрешаем как файл, так и директорию в CHATS_STORAGE
         env_value = os.getenv("CHATS_STORAGE")
@@ -24,9 +24,9 @@ class ChatsStore:
         else:
             resolved = Path("data") / "chats.json"
         self.path = resolved
-        if self.path.parent and str(self.path.parent) not in ("", "."):
+        if self.path.parent and str(self.path.parent) not in {"", "."}:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._data: Dict[str, Any] = {}
+        self._data: dict[str, Any] = {}
         self._load()
 
     def _load(self) -> None:
@@ -45,7 +45,7 @@ class ChatsStore:
         except Exception as e:
             self.logger.error(f"Не удалось сохранить список чатов: {e}")
 
-    def add_chat(self, chat_id: int, title: Optional[str] = None) -> None:
+    def add_chat(self, chat_id: int, title: str | None = None) -> None:
         storage = self._data.get("chats", {})
         storage[str(chat_id)] = {"title": title or ""}
         self._data["chats"] = storage
@@ -57,7 +57,5 @@ class ChatsStore:
         self._data["chats"] = storage
         self._save()
 
-    def list_chat_ids(self) -> List[int]:
+    def list_chat_ids(self) -> list[int]:
         return [int(cid) for cid in self._data.get("chats", {}).keys()]
-
-

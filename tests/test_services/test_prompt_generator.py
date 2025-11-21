@@ -1,5 +1,5 @@
-from unittest.mock import MagicMock
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 import requests
@@ -15,32 +15,37 @@ def client(monkeypatch: Any) -> GigaChatClient:
     return client
 
 
-def test_get_access_token_success(client: GigaChatClient) -> None:
+def test_get_access_token_success(client: GigaChatClient, monkeypatch: Any) -> None:
     response = MagicMock(status_code=200)
     response.json.return_value = {"access_token": "abc123", "expires_in": 1800}
-    client.session.post = MagicMock(return_value=response)
+    mock_post = MagicMock(return_value=response)
+    monkeypatch.setattr(client.session, "post", mock_post)
 
     token = client.get_access_token()
 
     assert token == "abc123"
-    client.session.post.assert_called_once()
+    mock_post.assert_called_once()
 
     # Проверяем, что повторный вызов использует кэш
-    client.session.post.reset_mock()
+    mock_post.reset_mock()
     cached = client.get_access_token()
     assert cached == "abc123"
-    client.session.post.assert_not_called()
+    # После reset_mock нужно проверить, что метод не был вызван снова
+    # Но так как используется кэш, post не должен вызываться
+    assert mock_post.call_count == 0
 
 
-def test_get_access_token_bad_status(client: GigaChatClient) -> None:
+def test_get_access_token_bad_status(client: GigaChatClient, monkeypatch: Any) -> None:
     response = MagicMock(status_code=500, text="error")
-    client.session.post = MagicMock(return_value=response)
+    mock_post = MagicMock(return_value=response)
+    monkeypatch.setattr(client.session, "post", mock_post)
 
     assert client.get_access_token() is None
 
 
-def test_get_access_token_timeout(client: GigaChatClient) -> None:
-    client.session.post = MagicMock(side_effect=requests.exceptions.Timeout("boom"))
+def test_get_access_token_timeout(client: GigaChatClient, monkeypatch: Any) -> None:
+    mock_post = MagicMock(side_effect=requests.exceptions.Timeout("boom"))
+    monkeypatch.setattr(client.session, "post", mock_post)
 
     assert client.get_access_token() is None
 
@@ -49,18 +54,19 @@ def test_generate_prompt_success(client: GigaChatClient, monkeypatch: Any) -> No
     monkeypatch.setattr(client, "get_access_token", MagicMock(return_value="token"))
     payload = {
         "choices": [
-            {"message": {"content": '```Prompt: "A frog"```'}}
-        ]
+            {"message": {"content": '```Prompt: "A frog"```'}},
+        ],
     }
     response = MagicMock(status_code=200)
     response.json.return_value = payload
-    monkeypatch.setattr(client.session, "post", MagicMock(return_value=response))
+    mock_post = MagicMock(return_value=response)
+    monkeypatch.setattr(client.session, "post", mock_post)
 
     prompt = client.generate_prompt_for_kandinsky()
 
     assert prompt is not None
     assert prompt.strip('"') == "A frog"
-    client.session.post.assert_called_once()
+    mock_post.assert_called_once()
 
 
 def test_generate_prompt_error_response(client: GigaChatClient, monkeypatch: Any) -> None:
@@ -105,4 +111,3 @@ def test_get_fallback_models(monkeypatch: Any) -> None:
 
     assert "GigaChat" in models
     assert len(models) > 0
-

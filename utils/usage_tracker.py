@@ -2,23 +2,23 @@
 Трекер использования генераций изображений по месяцам с хранением в файле.
 """
 
-import os
 import json
-from pathlib import Path
+import os
 from datetime import datetime
-from typing import Dict, Any, Optional
-from loguru import logger
+from pathlib import Path
+from typing import Any
 
-from utils.logger import get_logger
+from utils.logger import get_logger, log_all_methods
 
 
+@log_all_methods()
 class UsageTracker:
     """
     Учет количества генераций изображений по месяцам.
     Формат хранения: { "YYYY-MM": { "count": int } }
     """
 
-    def __init__(self, storage_path: Optional[str] = None, monthly_quota: int = 100, frog_threshold: int = 70) -> None:
+    def __init__(self, storage_path: str | None = None, monthly_quota: int = 100, frog_threshold: int = 70) -> None:
         self.logger = get_logger(__name__)
         # Разрешаем как файл, так и директорию в USAGE_STORAGE
         env_value = os.getenv("USAGE_STORAGE")
@@ -33,11 +33,11 @@ class UsageTracker:
         self.storage_path = resolved
         self.monthly_quota = monthly_quota
         self.frog_threshold = frog_threshold
-        self._data: Dict[str, Any] = {}
-        self._settings: Dict[str, Any] = {}
+        self._data: dict[str, Any] = {}
+        self._settings: dict[str, Any] = {}
 
         # Создаём директорию, если указана (например, data/)
-        if self.storage_path.parent and str(self.storage_path.parent) not in ("", "."):
+        if self.storage_path.parent and str(self.storage_path.parent) not in {"", "."}:
             try:
                 self.storage_path.parent.mkdir(parents=True, exist_ok=True)
             except Exception as e:
@@ -85,7 +85,7 @@ class UsageTracker:
 
     def _save(self) -> None:
         try:
-            payload: Dict[str, Any] = {}
+            payload: dict[str, Any] = {}
             # Обновим settings из текущих значений
             self._settings["monthly_quota"] = int(self.monthly_quota)
             self._settings["frog_threshold"] = int(self.frog_threshold)
@@ -99,7 +99,7 @@ class UsageTracker:
     def _month_key(dt: datetime) -> str:
         return dt.strftime("%Y-%m")
 
-    def increment(self, count: int = 1, when: Optional[datetime] = None) -> int:
+    def increment(self, count: int = 1, when: datetime | None = None) -> int:
         dt = when or datetime.utcnow()
         key = self._month_key(dt)
         month = self._data.get(key, {"count": 0})
@@ -110,20 +110,20 @@ class UsageTracker:
         self._save()
         return int(month["count"])
 
-    def get_month_total(self, when: Optional[datetime] = None) -> int:
+    def get_month_total(self, when: datetime | None = None) -> int:
         dt = when or datetime.utcnow()
         key = self._month_key(dt)
         return int(self._data.get(key, {}).get("count", 0))
 
-    def can_use_frog(self, when: Optional[datetime] = None) -> bool:
+    def can_use_frog(self, when: datetime | None = None) -> bool:
         total = self.get_month_total(when)
         return total < self.frog_threshold
 
-    def get_limits_info(self, when: Optional[datetime] = None) -> tuple[int, int, int]:
+    def get_limits_info(self, when: datetime | None = None) -> tuple[int, int, int]:
         total = self.get_month_total(when)
         return total, self.frog_threshold, self.monthly_quota
 
-    def set_month_total(self, total: int, when: Optional[datetime] = None) -> int:
+    def set_month_total(self, total: int, when: datetime | None = None) -> int:
         """
         Устанавливает текущее значение использования за месяц в абсолютном виде.
         Возвращает установленное значение.
@@ -140,10 +140,8 @@ class UsageTracker:
         Порог ограничивается диапазоном [0, monthly_quota]. Возвращает установленное значение.
         (Значение хранится в памяти, не в файле; применяется немедленно.)
         """
-        if threshold < 0:
-            threshold = 0
-        if threshold > self.monthly_quota:
-            threshold = self.monthly_quota
+        threshold = max(threshold, 0)
+        threshold = min(threshold, self.monthly_quota)
         self.frog_threshold = int(threshold)
         self._save()
         return self.frog_threshold

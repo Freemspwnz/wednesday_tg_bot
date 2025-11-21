@@ -2,18 +2,18 @@
 Хранилище администраторов с JSON-персистом.
 """
 
-import os
 import json
+import os
 from pathlib import Path
-from typing import List, Set, Optional, Dict, Any
-from loguru import logger
+from typing import Any
 
-from utils.logger import get_logger
 from utils.config import config
+from utils.logger import get_logger, log_all_methods
 
 
+@log_all_methods()
 class AdminsStore:
-    def __init__(self, storage_path: Optional[str] = None) -> None:
+    def __init__(self, storage_path: str | None = None) -> None:
         self.logger = get_logger(__name__)
         # Разрешаем как файл, так и директорию в ADMINS_STORAGE
         env_value = os.getenv("ADMINS_STORAGE")
@@ -25,9 +25,9 @@ class AdminsStore:
         else:
             resolved = Path("data") / "admins.json"
         self.path: Path = resolved
-        if self.path.parent and str(self.path.parent) not in ("", "."):
+        if self.path.parent and str(self.path.parent) not in {"", "."}:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._data: Dict[str, Any] = {}
+        self._data: dict[str, Any] = {}
         self._load()
 
     def _load(self) -> None:
@@ -52,7 +52,7 @@ class AdminsStore:
         main_admin = config.admin_chat_id
         if main_admin and int(main_admin) == user_id:
             return True
-        
+
         # Проверяем в хранилище
         admin_ids = [int(aid) for aid in self._data.get("admins", [])]
         return user_id in admin_ids
@@ -61,10 +61,10 @@ class AdminsStore:
         """Добавляет администратора. Возвращает True если добавлен, False если уже был."""
         admin_ids = self._data.get("admins", [])
         user_id_str = str(user_id)
-        
+
         if user_id_str in admin_ids:
             return False
-        
+
         admin_ids.append(user_id_str)
         self._data["admins"] = admin_ids
         self._save()
@@ -74,21 +74,21 @@ class AdminsStore:
         """Удаляет администратора. Возвращает True если удален, False если не был админом."""
         admin_ids = self._data.get("admins", [])
         user_id_str = str(user_id)
-        
+
         if user_id_str not in admin_ids:
             return False
-        
+
         admin_ids.remove(user_id_str)
         self._data["admins"] = admin_ids
         self._save()
         return True
 
-    def list_admins(self) -> List[int]:
+    def list_admins(self) -> list[int]:
         """Возвращает список всех админов (исключая главного админа из .env)."""
         admin_ids = [int(aid) for aid in self._data.get("admins", [])]
         return admin_ids
 
-    def list_all_admins(self) -> List[int]:
+    def list_all_admins(self) -> list[int]:
         """Возвращает список всех админов, включая главного из .env."""
         admin_ids = self.list_admins()
         main_admin = config.admin_chat_id
@@ -97,4 +97,3 @@ class AdminsStore:
             if main_id not in admin_ids:
                 admin_ids.insert(0, main_id)
         return admin_ids
-

@@ -1,6 +1,7 @@
 from typing import Any
-import pytest
+
 import dotenv
+import pytest
 
 
 def test_config_loads_required_env(monkeypatch: Any, reload_config: Any) -> None:
@@ -44,4 +45,3 @@ def test_config_missing_required_env(monkeypatch: Any, reload_config: Any) -> No
     monkeypatch.setenv("KANDINSKY_API_KEY", "restored-api")
     monkeypatch.setenv("KANDINSKY_SECRET_KEY", "restored-secret")
     monkeypatch.setenv("CHAT_ID", "12345")
-

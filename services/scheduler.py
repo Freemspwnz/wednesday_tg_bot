@@ -4,95 +4,99 @@
 """
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
-from typing import Callable, Awaitable, Optional, Dict, Any, Set, List, Union
-from loguru import logger
 
-from utils.logger import get_logger
 from utils.config import SchedulerConfig
+from utils.logger import get_logger, log_all_methods
+
+# Константы для магических чисел
+DAYS_IN_WEEK = 7
+SECONDS_PER_MINUTE = 60
 
 
+@log_all_methods()
 class TaskScheduler:
     """
     Планировщик задач для автоматического выполнения функций по расписанию.
-    
+
     Обеспечивает:
     - Планирование задач на определенное время
     - Выполнение задач в определенные дни недели
     - Асинхронное выполнение задач
     - Логирование выполнения задач
     """
-    
+
     def __init__(self) -> None:
         """Инициализация планировщика задач."""
         self.logger = get_logger(__name__)
         self.running: bool = False
-        self.tasks: Dict[str, Any] = {}  # Может содержать Callable или Set[str] для '_executed'
-        
+        self.tasks: dict[str, Any] = {}  # Может содержать Callable или Set[str] для '_executed'
+
         # Настройки планировщика
-        self.send_times: List[str] = SchedulerConfig.SEND_TIMES
+        self.send_times: list[str] = SchedulerConfig.SEND_TIMES
         self.wednesday: int = SchedulerConfig.WEDNESDAY
         self.check_interval: int = SchedulerConfig.CHECK_INTERVAL
-        self.tz: ZoneInfo = ZoneInfo(getattr(SchedulerConfig, 'TZ', 'Europe/Moscow'))
-        
+        self.tz: ZoneInfo = ZoneInfo(getattr(SchedulerConfig, "TZ", "Europe/Moscow"))
+
         self.logger.info("Планировщик задач инициализирован")
-    
-    def schedule_wednesday_task(self, task_func: Callable[[Optional[str]], Awaitable[None]]) -> None:
+
+    def schedule_wednesday_task(self, task_func: Callable[[str | None], Awaitable[None]]) -> None:
         """
         Планирует задачу на выполнение каждую среду в указанное время.
-        
+
         Args:
             task_func: Асинхронная функция для выполнения
         """
         self.logger.info(f"Планирую задачу на среду в {', '.join(self.send_times)} по {self.tz.key}")
-        
+
         # Сохраняем задачу для выполнения
-        self.tasks['wednesday_frog'] = task_func
-        
+        self.tasks["wednesday_frog"] = task_func
+
         self.logger.info("Задача успешно запланирована")
-    
+
     def schedule_daily_task(self, task_func: Callable[[], Awaitable[None]], time_str: str) -> None:
         """
         Планирует задачу на выполнение каждый день в указанное время.
-        
+
         Args:
             task_func: Асинхронная функция для выполнения
             time_str: Время выполнения в формате "HH:MM"
         """
         self.logger.info(f"Планирую ежедневную задачу в {time_str}")
-        
-        self.tasks['daily_task'] = {
-            'func': task_func,
-            'time_str': time_str,
-            'last_run_date': None,
+
+        self.tasks["daily_task"] = {
+            "func": task_func,
+            "time_str": time_str,
+            "last_run_date": None,
         }
-        
+
         self.logger.info("Ежедневная задача успешно запланирована")
-    
-    def schedule_interval_task(self, task_func: Callable[[], Awaitable[None]], 
-                             interval_minutes: int) -> None:
+
+    def schedule_interval_task(self, task_func: Callable[[], Awaitable[None]], interval_minutes: int) -> None:
         """
         Планирует задачу на выполнение с заданным интервалом.
-        
+
         Args:
             task_func: Асинхронная функция для выполнения
             interval_minutes: Интервал в минутах
         """
         self.logger.info(f"Планирую задачу с интервалом {interval_minutes} минут")
-        
-        self.tasks['interval_task'] = {
-            'func': task_func,
-            'interval_minutes': interval_minutes,
-            'last_run': None,
+
+        self.tasks["interval_task"] = {
+            "func": task_func,
+            "interval_minutes": interval_minutes,
+            "last_run": None,
         }
-        
+
         self.logger.info("Задача с интервалом успешно запланирована")
-    
+
     async def _run_async_task(self, task_func: Callable[..., Awaitable[None]]) -> None:
         """
         Обертка для выполнения асинхронных задач в планировщике.
-        
+
         Args:
             task_func: Асинхронная функция для выполнения
         """
@@ -102,14 +106,14 @@ class TaskScheduler:
             self.logger.info("Задача успешно выполнена")
         except Exception as e:
             self.logger.error(f"Ошибка при выполнении задачи: {e}")
-    
+
     async def start(self) -> None:
         """
         Запускает планировщик задач в асинхронном режиме.
         """
         self.logger.info("Запускаю планировщик задач")
         self.running = True
-        
+
         while self.running:
             try:
                 # Проверяем, нужно ли выполнить задачу на среду
@@ -118,68 +122,82 @@ class TaskScheduler:
                 await self._check_daily_task()
                 # Проверяем интервальную задачу, если задана
                 await self._check_interval_task()
-                
+
                 # Ждем до следующей проверки
                 await asyncio.sleep(self.check_interval)
-                
+
             except asyncio.CancelledError:
                 self.logger.info("Планировщик задач отменен")
                 break
             except Exception as e:
                 self.logger.error(f"Ошибка в планировщике: {e}")
                 await asyncio.sleep(self.check_interval)
-    
+
     async def _check_wednesday_task(self) -> None:
         """
         Проверяет, нужно ли выполнить задачу на среду.
         """
         now = datetime.now(self.tz)
-        
+
         # Проверяем, что сегодня среда
         if now.weekday() == self.wednesday:
             # Проверяем, что есть запланированные времена
             if not self.send_times:
                 onboarding_key = f"wednesday_executed_{now.strftime('%Y-%m-%d')}"
-                executed_value = self.tasks.get('_executed', set())
-                executed_set: Set[str] = executed_value if isinstance(executed_value, set) else set()
+                executed_value = self.tasks.get("_executed", set())
+                executed_set: set[str] = executed_value if isinstance(executed_value, set) else set()
                 if onboarding_key not in executed_set:
                     self.logger.warning("Не задано время отправки (SCHEDULER_SEND_TIMES пусто)")
-                    if '_executed' not in self.tasks:
-                        self.tasks['_executed'] = set()
-                    executed_set = self.tasks['_executed']
+                    if "_executed" not in self.tasks:
+                        self.tasks["_executed"] = set()
+                    executed_set = self.tasks["_executed"]
                     if isinstance(executed_set, set):
                         executed_set.add(onboarding_key)
                 return
-            
+
             # Проверяем каждый временной слот
-            executed_value = self.tasks.get('_executed', set())
-            executed: Set[str] = executed_value if isinstance(executed_value, set) else set()
+            executed_value = self.tasks.get("_executed", set())
+            executed: set[str] = executed_value if isinstance(executed_value, set) else set()
             for time_str in self.send_times:
                 key = f"wednesday_{now.strftime('%Y-%m-%d')}_{time_str}"
-                
+
                 # Пропускаем, если уже выполнено
                 if key in executed:
                     continue
-                
+
                 # Проверяем, наступило ли время
-                h, m = map(int, time_str.split(':'))
+                h, m = map(int, time_str.split(":"))
                 target_time = now.replace(hour=h, minute=m, second=0, microsecond=0)
-                
+
                 # Выполняем ТОЛЬКО в окне близком к слоту: [0, check_interval) секунд после слота
                 # Это предотвращает "задним числом" выполнение при рестарте
                 delta_sec = (now - target_time).total_seconds()
                 if 0 <= delta_sec < self.check_interval:
-                    if 'wednesday_frog' in self.tasks:
+                    if "wednesday_frog" in self.tasks:
                         # Передаём точное время слота в задачу, если она принимает аргумент slot_time
-                        task_func = self.tasks['wednesday_frog']
+                        task_func = self.tasks["wednesday_frog"]
+
+                        # Создаём функцию-обёртку для передачи slot_time
+                        # Используем функцию-фабрику для правильного замыкания
+
+                        def create_slot_wrapper(
+                            func: Callable[[str | None], Awaitable[None]],
+                            slot: str,
+                        ) -> Callable[[], Awaitable[None]]:
+                            async def wrapper() -> None:
+                                await func(slot)
+
+                            return wrapper
+
+                        wrapper_func = create_slot_wrapper(task_func, time_str)
                         try:
-                            await self._run_async_task(lambda: task_func(slot_time=time_str))
+                            await self._run_async_task(wrapper_func)
                         except TypeError:
                             # Обратная совместимость: если функция без параметров
                             await self._run_async_task(task_func)
-                        if '_executed' not in self.tasks:
-                            self.tasks['_executed'] = set()
-                        executed_set = self.tasks['_executed']
+                        if "_executed" not in self.tasks:
+                            self.tasks["_executed"] = set()
+                        executed_set = self.tasks["_executed"]
                         if isinstance(executed_set, set):
                             executed_set.add(key)
                         self.logger.info(f"Задача на среду выполнена: {key}")
@@ -188,58 +206,58 @@ class TaskScheduler:
         """
         Проверяет, нужно ли выполнить ежедневную задачу.
         """
-        daily = self.tasks.get('daily_task')
+        daily = self.tasks.get("daily_task")
         if not isinstance(daily, dict):
             return
         now = datetime.now()
-        last_run_date = daily.get('last_run_date')
-        today_str = now.strftime('%Y-%m-%d')
-        
+        last_run_date = daily.get("last_run_date")
+        today_str = now.strftime("%Y-%m-%d")
+
         # Проверяем, если еще не запускалось сегодня
         if last_run_date != today_str:
             # Проверяем, наступило ли время
-            h, m = map(int, daily['time_str'].split(':'))
+            h, m = map(int, daily["time_str"].split(":"))
             target_time = now.replace(hour=h, minute=m, second=0, microsecond=0)
-            
+
             # Выполняем, если время наступило
             if now >= target_time:
-                await self._run_async_task(daily['func'])
-                daily['last_run_date'] = today_str
+                await self._run_async_task(daily["func"])
+                daily["last_run_date"] = today_str
                 self.logger.info(f"Ежедневная задача выполнена: {today_str}")
 
     async def _check_interval_task(self) -> None:
         """
         Проверяет, нужно ли выполнить интервальную задачу.
         """
-        interval_meta = self.tasks.get('interval_task')
+        interval_meta = self.tasks.get("interval_task")
         if not isinstance(interval_meta, dict):
             return
         now = datetime.now()
-        last_run = interval_meta.get('last_run')
-        interval_minutes = interval_meta['interval_minutes']
-        if last_run is None or (now - last_run).total_seconds() >= interval_minutes * 60:
-            await self._run_async_task(interval_meta['func'])
-            interval_meta['last_run'] = now
+        last_run = interval_meta.get("last_run")
+        interval_minutes = interval_meta["interval_minutes"]
+        if last_run is None or (now - last_run).total_seconds() >= interval_minutes * SECONDS_PER_MINUTE:
+            await self._run_async_task(interval_meta["func"])
+            interval_meta["last_run"] = now
             self.logger.info("Интервальная задача выполнена")
-    
+
     def stop(self) -> None:
         """
         Останавливает планировщик задач.
         """
         self.logger.info("Останавливаю планировщик задач")
         self.running = False
-    
-    def get_next_run(self) -> Optional[datetime]:
+
+    def get_next_run(self) -> datetime | None:
         """
         Возвращает время следующего запланированного выполнения.
-        
+
         Returns:
             Время следующего выполнения задачи
         """
         now = datetime.now(self.tz)
 
         # вычислим список кандидатов времени запуска
-        candidates: List[datetime] = []
+        candidates: list[datetime] = []
 
         # Если сегодня среда — сначала проверяем ближайшие слоты сегодня, которые еще не прошли
         if now.weekday() == self.wednesday:
@@ -251,9 +269,9 @@ class TaskScheduler:
                     candidates.append(dt)
 
         # Добавим слоты следующей среды
-        days_ahead = (self.wednesday - now.weekday()) % 7
+        days_ahead = (self.wednesday - now.weekday()) % DAYS_IN_WEEK
         if days_ahead == 0:
-            days_ahead = 7
+            days_ahead = DAYS_IN_WEEK
         base = (now + timedelta(days=days_ahead)).replace(second=0, microsecond=0)
         for t in self.send_times:
             h, m = t.split(":")
@@ -263,19 +281,19 @@ class TaskScheduler:
             next_run: datetime = min(candidates)
             return next_run
         return None
-    
+
     def clear_all_jobs(self) -> None:
         """
         Очищает все запланированные задачи.
         """
         self.logger.info("Очищаю все запланированные задачи")
         self.tasks.clear()
-    
+
     def get_jobs_count(self) -> int:
         """
         Возвращает количество запланированных задач.
-        
+
         Returns:
             Количество активных задач
         """
-        return len([k for k in self.tasks.keys() if not k.startswith('_')])
+        return len([k for k in self.tasks.keys() if not k.startswith("_")])

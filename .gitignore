@@ -158,6 +158,11 @@ data/
 # Certificates
 *.pem
 
-# Coverage reports
+# Test results and coverage reports
 coverage.xml
 .coverage
+junit.xml
+.junit
+
+# Release notes
+release-notes.md

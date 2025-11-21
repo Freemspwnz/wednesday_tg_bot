@@ -1,4 +1,3 @@
-from typing import Any
 from pathlib import Path
 
 from utils.models_store import ModelsStore
@@ -41,4 +40,3 @@ def test_models_store_handles_string_models(tmp_path: Path) -> None:
     store.set_kandinsky_available_models(["Model X", "Model Y"])
 
     assert store.get_kandinsky_available_models() == ["Model X", "Model Y"]
-
