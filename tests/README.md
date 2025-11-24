@@ -22,4 +22,3 @@ pytest --cov=bot --cov=services --cov=utils --cov-report=xml |--cov-report=term-
 ## Запуск в CI
 
 Тесты автоматически выполняются при каждом `push` и `pull request` через GitHub Actions.
-

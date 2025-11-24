@@ -104,4 +104,3 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]
 pythonpath = ["."]
-

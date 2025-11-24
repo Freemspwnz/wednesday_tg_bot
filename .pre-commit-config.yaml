@@ -1,0 +1,144 @@
+# Pre-commit hooks configuration для Wednesday Frog Bot
+# Все инструменты используют конфигурацию из pyproject.toml
+# Установка: pre-commit install && pre-commit install --hook-type pre-push
+
+minimum_pre_commit_version: "3.5.0"
+default_stages: [pre-commit]
+default_language_version:
+  python: python3.14
+fail_fast: false
+
+# Исключаем служебные каталоги (виртуальные окружения, миграции, кэш и пр.)
+exclude: |
+  (?x)(
+    ^migrations/ |
+    ^\.?venv/ |
+    ^env/ |
+    ^venv/ |
+    ^data/ |
+    ^logs/ |
+    ^tmp/ |
+    __pycache__/ |
+    \.ruff_cache/ |
+    \.mypy_cache/
+  )
+
+repos:
+  # ---------------------------
+  # Базовые проверки файлов (YAML, JSON, размер, конфликты)
+  # ---------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      # Проверка размера файлов (максимум 1 МБ)
+      - id: check-added-large-files
+        name: Check for large files
+        args: ["--maxkb=1024"]
+
+      # Проверка конфликтов слияния
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+
+      # Валидация YAML файлов
+      - id: check-yaml
+        name: Check YAML syntax
+        args: ["--unsafe"]  # Разрешаем пользовательские теги
+
+      # Валидация JSON файлов
+      - id: check-json
+        name: Check JSON syntax
+
+      # Автоматическое исправление: добавляет пустую строку в конце файла
+      - id: end-of-file-fixer
+        name: Fix end of files
+        # Работает только с измененными файлами (по умолчанию)
+
+      # Автоматическое исправление: удаляет пробелы в конце строк
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+        args: [--markdown-linebreak-ext=md]
+        # Работает только с измененными файлами (по умолчанию)
+
+      # Поиск приватных ключей в коде
+      - id: detect-private-key
+        name: Detect private keys
+
+      # Поиск AWS credentials (опционально, не падает при отсутствии)
+      # - id: detect-aws-credentials
+      #  name: Detect AWS credentials
+        # Не требует аргументов, работает опционально
+
+  # ---------------------------
+  # Проверка .env файлов (валидация синтаксиса и дубликатов)
+  # ---------------------------
+  - repo: https://github.com/dotenv-linter/dotenv-linter
+    rev: v4.0.0
+    hooks:
+      - id: dotenv-linter
+        name: Dotenv linter
+        files: "^\\.env.*"
+        # Проверяет только .env файлы
+
+  # ---------------------------
+  # Ruff: линтер и форматтер (использует конфиг из pyproject.toml)
+  # ---------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.6
+    hooks:
+      # Ruff lint: проверяет весь проект
+      # Автоматически использует [tool.ruff] из pyproject.toml
+      # Для автоисправления можно добавить --fix в args
+      - id: ruff
+        name: Ruff Lint
+
+      # Ruff format: проверяет форматирование
+      # Автоматически использует [tool.ruff.format] из pyproject.toml
+      - id: ruff-format
+        name: Ruff Format
+
+  # ---------------------------
+  # Mypy: проверка типов (использует конфиг из pyproject.toml)
+  # ---------------------------
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.18.2
+    hooks:
+      - id: mypy
+        name: Mypy type checker
+        # Автоматически использует [tool.mypy] из pyproject.toml
+        additional_dependencies:
+          - types-requests
+          - types-python-dateutil
+          - aiohttp==3.13.1
+        # Дополнительные типы для внешних библиотек
+
+  # ---------------------------
+  # Gitleaks: поиск секретов в коде (дополнительно к базовым хукам)
+  # ---------------------------
+  - repo: https://github.com/zricethezav/gitleaks
+    rev: v8.29.1
+    hooks:
+      - id: gitleaks
+        name: Gitleaks secret scanner
+        # Сканирует весь репозиторий на наличие секретов
+        pass_filenames: false
+
+  # ---------------------------
+  # Pre-push: полный запуск pytest с покрытием (как в GitHub Actions)
+  # ---------------------------
+  - repo: local
+    hooks:
+      - id: pytest-pre-push
+        name: Run pytest with coverage before push
+        entry: >
+          python -m pytest
+          --cov=bot
+          --cov=services
+          --cov=utils
+          --cov-report=xml:coverage.xml
+          --cov-report=term
+          --junitxml=junit.xml
+          -o junit_family=legacy
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+        # Запускается только перед push, использует конфиг из pyproject.toml

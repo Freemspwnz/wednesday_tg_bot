@@ -109,7 +109,6 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-wednesday/
 
 # Spyder project settings
 .spyderproject
@@ -164,5 +163,8 @@ coverage.xml
 junit.xml
 .junit
 
-# Release notes
-release-notes.md
+# Ruff
+.ruff_cache/
+ruff.log
+ruff_profile.txt
+ruff_*.txt

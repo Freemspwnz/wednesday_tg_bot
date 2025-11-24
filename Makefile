@@ -11,7 +11,9 @@ format:
 	ruff format .
 
 test:
-	pytest $(COV_ARGS) --cov-report=xml:coverage.xml --cov-report=term
+	pytest $(COV_ARGS) --cov-report=xml:coverage.xml --cov-report=term \
+	--junitxml=junit.xml \
+    -o junit_family=legacy
 
 type:
 	mypy .
@@ -27,4 +29,3 @@ ci:
 
 build:
 	@echo "TODO: docker build"
-
