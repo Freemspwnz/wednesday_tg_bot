@@ -8,8 +8,22 @@ from typing import ClassVar
 
 from dotenv import load_dotenv
 
-# Загружаем переменные окружения из файла .env
-load_dotenv()
+_DOTENV_STATE = {"loaded": False}
+
+
+def _load_dotenv_if_needed() -> None:
+    """
+    Ленивый fallback: при первом обращении к отсутствующей переменной
+    пробуем загрузить их из локального `.env` без жестко заданного пути.
+    """
+    if _DOTENV_STATE["loaded"]:
+        return
+    # Порядок загрузки:
+    # 1) Сначала читаем переменные из окружения контейнера (os.environ)
+    # 2) Если какой-то переменной не хватает — однократно пробуем загрузить `.env`
+    #    через python-dotenv (если файл существует в текущем каталоге).
+    load_dotenv()
+    _DOTENV_STATE["loaded"] = True
 
 
 class Config:
@@ -33,6 +47,7 @@ class Config:
             "KANDINSKY_API_KEY",
             "KANDINSKY_SECRET_KEY",
             "CHAT_ID",
+            "ADMIN_CHAT_ID",
         ]
 
         missing_vars = []
@@ -41,8 +56,17 @@ class Config:
                 missing_vars.append(var)
 
         if missing_vars:
+            # Используем стандартный logging, чтобы избежать циклических импортов с utils.logger
+            import logging
+
+            logger = logging.getLogger(__name__)
+            for var in missing_vars:
+                logger.error("Отсутствует обязательная переменная окружения: %s", var)
+
             raise ValueError(
-                f"Отсутствуют обязательные переменные окружения: {', '.join(missing_vars)}. Проверьте файл .env",
+                "Отсутствуют обязательные переменные окружения: "
+                f"{', '.join(missing_vars)}. Проверьте переменные окружения контейнера "
+                "и/или локальный файл .env",
             )
 
     @staticmethod
@@ -56,6 +80,13 @@ class Config:
         Returns:
             Значение переменной или None, если переменная не найдена
         """
+        # Сначала читаем значение только из переменных окружения контейнера
+        value = os.getenv(name)
+        if value is not None:
+            return value
+
+        # Если переменная не найдена, один раз пробуем подгрузить .env через python-dotenv
+        _load_dotenv_if_needed()
         return os.getenv(name)
 
     @property
@@ -336,7 +367,8 @@ class SchedulerConfig:
     @staticmethod
     def _parse_send_times() -> list[str]:
         """Парсит времена отправки из ENV с валидацией."""
-        env_times = os.getenv("SCHEDULER_SEND_TIMES")
+        # Берем значение из окружения контейнера, при необходимости с fallback в .env
+        env_times = Config._get_env_var("SCHEDULER_SEND_TIMES")
         if env_times:
             times = [t.strip() for t in env_times.split(",")]
             validated = []
@@ -359,7 +391,7 @@ class SchedulerConfig:
     @staticmethod
     def _parse_wednesday_day() -> int:
         """Парсит день недели с валидацией."""
-        env_day = os.getenv("SCHEDULER_WEDNESDAY_DAY")
+        env_day = Config._get_env_var("SCHEDULER_WEDNESDAY_DAY")
         if env_day:
             try:
                 day = int(env_day)
@@ -378,4 +410,4 @@ class SchedulerConfig:
     CHECK_INTERVAL = 30
 
     # Часовой пояс для расписания
-    TZ = os.getenv("SCHEDULER_TZ", "Europe/Moscow")
+    TZ = Config._get_env_var("SCHEDULER_TZ") or "Europe/Moscow"

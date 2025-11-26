@@ -8,7 +8,6 @@ import signal
 import sys
 import types
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from bot.support_bot import SupportBot
@@ -205,11 +204,11 @@ class BotRunner:
                 shutdown_task = asyncio.create_task(self._wait_for_shutdown())
 
                 self.logger.info("[Supervisor] Ожидание завершения bot_task или shutdown_task")
-                _done, _pending = await asyncio.wait(
+                done, pending = await asyncio.wait(
                     [bot_task, shutdown_task],
                     return_when=asyncio.FIRST_COMPLETED,
                 )
-                self.logger.info(f"[Supervisor] Одна из задач завершена: done={len(_done)}, pending={len(_pending)}")
+                self.logger.info(f"[Supervisor] Одна из задач завершена: done={len(done)}, pending={len(pending)}")
 
                 # Если пришёл сигнал — останавливаем основной и снова уходим в SupportBot
                 if self.should_stop or self.shutdown_event.is_set():
@@ -307,32 +306,23 @@ class BotRunner:
         """
         self.logger.info("Начало проверки требований для запуска")
 
-        # Проверяем наличие файла .env
-        env_file = Path(".env")
-        self.logger.info(f"Проверка наличия файла .env: {env_file.absolute()}")
-        if not env_file.exists():
-            self.logger.error("Файл .env не найден!")
-            self.logger.error("Создайте файл .env со следующими переменными:")
-            self.logger.error("TELEGRAM_BOT_TOKEN=your_bot_token_here")
-            self.logger.error("KANDINSKY_API_KEY=your_kandinsky_api_key_here")
-            self.logger.error("KANDINSKY_SECRET_KEY=your_kandinsky_secret_key_here")
-            self.logger.error("CHAT_ID=your_chat_or_channel_id_here")
-            sys.exit(1)
-        self.logger.info("Файл .env найден")
-
-        # Проверяем конфигурацию
-        self.logger.info("Проверка конфигурации: загрузка обязательных переменных")
+        # На этом этапе переменные окружения уже загружены через utils.config:
+        # сначала из окружения контейнера, затем при необходимости fallback из .env.
+        # Здесь мы только логируем наличие ключевых обязательных переменных.
+        self.logger.info("Проверка конфигурации: логирование обязательных переменных окружения")
         try:
             # Проверяем, что все обязательные переменные загружены
             telegram_token = config.telegram_token
             kandinsky_api_key = config.kandinsky_api_key
             kandinsky_secret_key = config.kandinsky_secret_key
             chat_id = config.chat_id
+            admin_chat_id = config.admin_chat_id
             self.logger.info("Все обязательные переменные конфигурации загружены успешно")
             self.logger.info(f"TELEGRAM_BOT_TOKEN: {'установлен' if telegram_token else 'не установлен'}")
             self.logger.info(f"KANDINSKY_API_KEY: {'установлен' if kandinsky_api_key else 'не установлен'}")
             self.logger.info(f"KANDINSKY_SECRET_KEY: {'установлен' if kandinsky_secret_key else 'не установлен'}")
             self.logger.info(f"CHAT_ID: {'установлен' if chat_id else 'не установлен'}")
+            self.logger.info(f"ADMIN_CHAT_ID: {'установлен' if admin_chat_id else 'не установлен'}")
         except Exception as e:
             self.logger.error(f"Ошибка в конфигурации: {e}", exc_info=True)
             sys.exit(1)

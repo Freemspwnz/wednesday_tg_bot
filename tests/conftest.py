@@ -15,6 +15,7 @@ _session_env_defaults = {
     "KANDINSKY_API_KEY": "session-test-api",
     "KANDINSKY_SECRET_KEY": "session-test-secret",
     "CHAT_ID": "999999",
+    "ADMIN_CHAT_ID": "999998",
 }
 
 for key, value in _session_env_defaults.items():
@@ -74,6 +75,7 @@ def base_env(monkeypatch: Any, tmp_path_factory: Any) -> Generator[None, None, N
         "KANDINSKY_API_KEY": "test-api",
         "KANDINSKY_SECRET_KEY": "test-secret",
         "CHAT_ID": "12345",
+        "ADMIN_CHAT_ID": "54321",
         "GIGACHAT_AUTHORIZATION_KEY": "ZmFrZS1rZXk=",
         "GIGACHAT_SCOPE": "GIGACHAT_API_PERS",
         "MODELS_STORAGE": str(storage_dir / "models.json"),
