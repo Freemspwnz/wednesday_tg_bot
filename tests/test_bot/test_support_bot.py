@@ -50,10 +50,10 @@ def support_bot(monkeypatch: Any) -> Any:
         def __init__(self) -> None:
             self.admins: set[int] = {1}
 
-        def is_admin(self, user_id: int) -> bool:
+        async def is_admin(self, user_id: int) -> bool:
             return user_id in self.admins
 
-        def list_all_admins(self) -> list[int]:
+        async def list_all_admins(self) -> list[int]:
             return list(self.admins)
 
     class DummyCommandHandler:

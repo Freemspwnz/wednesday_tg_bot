@@ -42,6 +42,14 @@
    - `utils/dispatch_registry.py` — `DispatchRegistry` отслеживает отправки по слотам в таблице `dispatch_registry` вместо `dispatch_registry.json`.
    - `utils/metrics.py` — `Metrics` агрегирует показатели в таблице `metrics` (единая строка `id=1`) вместо `metrics.json`.
    - `utils/models_store.py` — `ModelsStore` разбит на две таблицы: `models_kandinsky` и `models_gigachat` для текущих и доступных моделей.
+ - **Async-проводка бота и тестов для работы с Postgres**:
+   - `bot/wednesday_bot.py` — методы отправки жабы и обработки добавления/удаления чатов теперь используют async‑репозитории (`ChatsStore`, `DispatchRegistry`, `UsageTracker`, `Metrics`, `AdminsStore`) через `await`, без изменения внешнего API.
+   - `bot/support_bot.py` — проверки прав администратора и рассылка уведомлений обрабатываются через async‑интерфейс `AdminsStore`.
+   - `bot/handlers.py` — все админ‑команды и команды работы с лимитами/чатами/статусом (`/help`, `/frog`, `/status`, `/force_send`, `/add_chat`, `/remove_chat`, `/list_chats` и др.) переведены на использование async‑сторов (`AdminsStore`, `UsageTracker`, `ChatsStore`, `Metrics`) с `await`.
+   - `services/image_generator.py` — обновление метрик генерации (`Metrics`) выполняется асинхронно с защитой от сбоев в слое метрик.
+   - `tests/conftest.py` — добавлена сессионная async‑фикстура `_setup_test_postgres`, инициализирующая пул `asyncpg`, вызывающая `ensure_schema()` и очищающая основные таблицы перед тестами.
+   - `tests/test_utils/test_usage_tracker.py`, `tests/test_utils/test_models_store.py` — переписаны как async‑тесты поверх Postgres‑репозиториев.
+   - `tests/test_bot/test_wednesday_bot.py`, `tests/test_bot/test_support_bot.py` — заглушки (`Dummy*Store`, `DummyMetrics`) приведены к async‑интерфейсам, чтобы соответствовать новым async‑сторам.
 
 ### Изменено
 - **`utils/config.py`**:

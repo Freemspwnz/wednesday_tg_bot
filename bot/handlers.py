@@ -86,7 +86,7 @@ class CommandHandlers:
 
         user_id = update.effective_user.id
         self.logger.info(f"set_frog_limit_command: запрос от пользователя {user_id}")
-        if not self.admins_store.is_admin(user_id):
+        if not await self.admins_store.is_admin(user_id):
             self.logger.warning(f"set_frog_limit_command: пользователь {user_id} не является администратором")
             await update.message.reply_text("❌ Доступно только администратору")
             return
@@ -105,8 +105,8 @@ class CommandHandlers:
             desired = min(raw, MAX_FROG_THRESHOLD)
             usage = context.application.bot_data.get("usage")
             if usage:
-                new_threshold = usage.set_frog_threshold(desired)
-                total, _threshold, quota = usage.get_limits_info()
+                new_threshold = await usage.set_frog_threshold(desired)
+                total, _threshold, quota = await usage.get_limits_info()
                 self.logger.info(
                     f"set_frog_limit_command: порог установлен на {new_threshold}, использование: {total}/{quota}",
                 )
@@ -132,7 +132,7 @@ class CommandHandlers:
             return
 
         user_id = update.effective_user.id
-        if not self.admins_store.is_admin(user_id):
+        if not await self.admins_store.is_admin(user_id):
             await update.message.reply_text("❌ Доступно только администратору")
             return
         if not context.args or len(context.args) < 1:
@@ -146,8 +146,8 @@ class CommandHandlers:
             if usage:
                 # Ограничим значением квоты
                 capped = min(raw, usage.monthly_quota)
-                usage.set_month_total(capped)
-                total, threshold, quota = usage.get_limits_info()
+                await usage.set_month_total(capped)
+                total, threshold, quota = await usage.get_limits_info()
                 await update.message.reply_text(
                     f"✅ Текущее использование /frog: {total}/{threshold} (квота: {quota})",
                 )
@@ -162,7 +162,7 @@ class CommandHandlers:
             return
 
         user_id = update.effective_user.id
-        if not self.admins_store.is_admin(user_id):
+        if not await self.admins_store.is_admin(user_id):
             try:
                 await self._retry_on_connect_error(
                     update.message.reply_text,
@@ -455,7 +455,7 @@ class CommandHandlers:
         self.logger.info(f"Получена команда /help от пользователя {user_id}")
 
         # Проверка доступа администратора
-        is_admin = self.admins_store.is_admin(user_id)
+        is_admin = await self.admins_store.is_admin(user_id)
 
         if is_admin:
             # Админская справка
@@ -569,7 +569,7 @@ class CommandHandlers:
             return
 
         # Проверка на админа - пропускаем per-user rate limit для админа
-        is_admin = self.admins_store.is_admin(user_id)
+        is_admin = await self.admins_store.is_admin(user_id)
 
         # Rate limit: per-user (пропускаем для админа)
         if not is_admin:
@@ -598,8 +598,8 @@ class CommandHandlers:
 
         # Проверяем лимит генераций (храним в application.bot_data)
         usage = context.application.bot_data.get("usage")
-        if usage and not usage.can_use_frog():
-            total, threshold, quota = usage.get_limits_info()
+        if usage and not await usage.can_use_frog():
+            total, threshold, quota = await usage.get_limits_info()
             try:
                 await self._retry_on_connect_error(
                     update.message.reply_text,
@@ -875,7 +875,7 @@ class CommandHandlers:
         self.logger.info(f"Получена команда /status от пользователя {user_id}")
 
         # Проверка доступа администратора
-        if not self.admins_store.is_admin(user_id):
+        if not await self.admins_store.is_admin(user_id):
             try:
                 await self._retry_on_connect_error(
                     update.message.reply_text,
@@ -942,7 +942,7 @@ class CommandHandlers:
             usage = context.application.bot_data.get("usage")
             usage_info = "N/A"
             if usage:
-                total, threshold, quota = usage.get_limits_info()
+                total, threshold, quota = await usage.get_limits_info()
                 used_percent = int(total / quota * PERCENT_MULTIPLIER) if quota else 0
                 usage_info = f"{total}/{quota} ({used_percent}%), порог: {threshold}"
 
@@ -950,13 +950,13 @@ class CommandHandlers:
             chats = context.application.bot_data.get("chats")
             chats_info: str | int = "N/A"
             if chats:
-                chats_info = len(chats.list_chat_ids())
+                chats_info = len(await chats.list_chat_ids())
 
             # Метрики производительности (из /health)
             metrics = context.application.bot_data.get("metrics")
             metrics_text = "Не настроены"
             if metrics:
-                m_sum = metrics.get_summary()
+                m_sum = await metrics.get_summary()
                 total_requests = m_sum["generations_total"]
                 successful = m_sum["generations_success"]
                 success_rate = (successful / total_requests * PERCENT_MULTIPLIER) if total_requests > 0 else 0
@@ -1104,7 +1104,7 @@ class CommandHandlers:
                 self.logger.error(f"Не удалось отправить сообщение об ошибке после {3} попыток: {e}")
             return
 
-        chat_ids = chats.list_chat_ids()
+        chat_ids = await chats.list_chat_ids()
         if not chat_ids:
             self.logger.info("Нет активных чатов")
             try:
@@ -1158,9 +1158,9 @@ class CommandHandlers:
         usage = context.application.bot_data.get("usage")
         can_generate = True
         if usage:
-            can_generate = usage.can_use_frog()
+            can_generate = await usage.can_use_frog()
             if not can_generate:
-                total, threshold, quota = usage.get_limits_info()
+                total, threshold, quota = await usage.get_limits_info()
                 self.logger.info(
                     f"Лимит ручных генераций исчерпан: {total}/{quota}, порог: {threshold}",
                 )
@@ -1364,7 +1364,7 @@ class CommandHandlers:
         if not update.message or not update.effective_user:
             return
 
-        if not self.admins_store.is_admin(update.effective_user.id):
+        if not await self.admins_store.is_admin(update.effective_user.id):
             try:
                 await self._retry_on_connect_error(
                     update.message.reply_text,
@@ -1392,7 +1392,7 @@ class CommandHandlers:
             chat_id = int(context.args[0])
             chats = context.application.bot_data.get("chats")
             if chats:
-                chats.add_chat(chat_id, "Manually added")
+                await chats.add_chat(chat_id, "Manually added")
                 try:
                     await self._retry_on_connect_error(
                         update.message.reply_text,
@@ -1418,7 +1418,7 @@ class CommandHandlers:
         if not update.message or not update.effective_user:
             return
 
-        if not self.admins_store.is_admin(update.effective_user.id):
+        if not await self.admins_store.is_admin(update.effective_user.id):
             await update.message.reply_text("❌ Доступно только администратору")
             return
 
@@ -1430,7 +1430,7 @@ class CommandHandlers:
             chat_id = int(context.args[0])
             chats = context.application.bot_data.get("chats")
             if chats:
-                chats.remove_chat(chat_id)
+                await chats.remove_chat(chat_id)
                 await update.message.reply_text(f"✅ Чат {chat_id} удалён из рассылки")
         except ValueError:
             await update.message.reply_text("❌ Неверный chat_id (должен быть числом)")
@@ -1443,7 +1443,7 @@ class CommandHandlers:
         user_id = update.effective_user.id
         self.logger.info(f"Получена команда /list_chats от пользователя {user_id}")
 
-        if not self.admins_store.is_admin(user_id):
+        if not await self.admins_store.is_admin(user_id):
             try:
                 await self._retry_on_connect_error(
                     update.message.reply_text,
@@ -1469,7 +1469,7 @@ class CommandHandlers:
                 self.logger.error(f"Не удалось отправить сообщение об ошибке после {3} попыток: {e}")
             return
 
-        chat_ids = chats.list_chat_ids()
+        chat_ids = await chats.list_chat_ids()
         if not chat_ids:
             self.logger.info("Нет активных чатов")
             try:
@@ -1511,7 +1511,7 @@ class CommandHandlers:
         if not update.message or not update.effective_user:
             return
 
-        if not self.admins_store.is_admin(update.effective_user.id):
+        if not await self.admins_store.is_admin(update.effective_user.id):
             try:
                 await self._retry_on_connect_error(
                     update.message.reply_text,
@@ -1574,7 +1574,7 @@ class CommandHandlers:
         if not update.message or not update.effective_user:
             return
 
-        if not self.admins_store.is_admin(update.effective_user.id):
+        if not await self.admins_store.is_admin(update.effective_user.id):
             try:
                 await self._retry_on_connect_error(
                     update.message.reply_text,

@@ -76,24 +76,24 @@ def wednesday_bot(monkeypatch: Any) -> Any:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             self.total: int = 0
 
-        def increment(self, value: int) -> None:
+        async def increment(self, value: int) -> None:
             self.total += value
 
     class DummyChatsStore:
         def __init__(self) -> None:
             self.chat_ids: list[int] = [111]
 
-        def list_chat_ids(self) -> list[int]:
+        async def list_chat_ids(self) -> list[int]:
             return list(self.chat_ids)
 
     class DummyDispatchRegistry:
         def __init__(self) -> None:
             self.sent: set[Any] = set()
 
-        def is_dispatched(self, date: str, slot: str, chat_id: int) -> bool:
+        async def is_dispatched(self, date: str, slot: str, chat_id: int) -> bool:
             return (date, slot, chat_id) in self.sent
 
-        def mark_dispatched(self, date: str, slot: str, chat_id: int) -> None:
+        async def mark_dispatched(self, date: str, slot: str, chat_id: int) -> None:
             self.sent.add((date, slot, chat_id))
 
     class DummyMetrics:
@@ -101,10 +101,10 @@ def wednesday_bot(monkeypatch: Any) -> Any:
             self.success: int = 0
             self.failed: int = 0
 
-        def increment_dispatch_success(self) -> None:
+        async def increment_dispatch_success(self) -> None:
             self.success += 1
 
-        def increment_dispatch_failed(self) -> None:
+        async def increment_dispatch_failed(self) -> None:
             self.failed += 1
 
     class DummyHandlers:
