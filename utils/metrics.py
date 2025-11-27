@@ -1,99 +1,151 @@
 """
-Система метрик для отслеживания производительности.
+Система метрик для отслеживания производительности на базе PostgreSQL.
+
+Ранее данные хранились в JSON-файле `data/metrics.json`, теперь используется
+таблица `metrics` (см. `utils.postgres_schema`).
 """
 
-import json
-import os
-from pathlib import Path
+from __future__ import annotations
+
 from typing import Any
 
 from utils.logger import get_logger, log_all_methods
+from utils.postgres_client import get_postgres_pool
 
 
 @log_all_methods()
 class Metrics:
+    """
+    Репозиторий метрик производительности.
+
+    Все значения агрегируются в одной строке с id=1, что достаточно для
+    текущих сценариев мониторинга.
+    """
+
     def __init__(self, storage_path: str | None = None) -> None:
         self.logger = get_logger(__name__)
-        env_value = os.getenv("METRICS_STORAGE")
-        if storage_path:
-            resolved = Path(storage_path)
-        elif env_value:
-            candidate = Path(env_value)
-            resolved = candidate if candidate.suffix.lower() == ".json" else (candidate / "metrics.json")
-        else:
-            resolved = Path("data") / "metrics.json"
-        self.path = resolved
-        if self.path.parent and str(self.path.parent) not in {"", "."}:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._data: dict[str, Any] = {}
-        self._load()
 
-    def _load(self) -> None:
-        try:
-            if self.path.exists():
-                self._data = json.loads(self.path.read_text(encoding="utf-8"))
-            else:
-                self._data = {
-                    "generations": {"success": 0, "failed": 0, "retries": 0, "total_time": 0},
-                    "dispatches": {"success": 0, "failed": 0},
-                    "circuit_breaker_trips": 0,
-                }
-        except Exception as e:
-            self._data = {
-                "generations": {"success": 0, "failed": 0, "retries": 0, "total_time": 0},
-                "dispatches": {"success": 0, "failed": 0},
+    @staticmethod
+    async def _ensure_row() -> None:
+        """
+        Гарантирует наличие базовой строки метрик (id=1).
+        """
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO metrics (id)
+                VALUES (1)
+                ON CONFLICT (id) DO NOTHING;
+                """,
+            )
+
+    async def increment_generation_success(self) -> None:
+        await self._ensure_row()
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE metrics SET generations_success = generations_success + 1 WHERE id = 1;",
+            )
+
+    async def increment_generation_failed(self) -> None:
+        await self._ensure_row()
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE metrics SET generations_failed = generations_failed + 1 WHERE id = 1;",
+            )
+
+    async def increment_generation_retry(self) -> None:
+        await self._ensure_row()
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE metrics SET generations_retries = generations_retries + 1 WHERE id = 1;",
+            )
+
+    async def add_generation_time(self, seconds: float) -> None:
+        await self._ensure_row()
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE metrics SET generations_total_time = generations_total_time + $1 WHERE id = 1;",
+                float(seconds),
+            )
+
+    async def increment_dispatch_success(self) -> None:
+        await self._ensure_row()
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE metrics SET dispatch_success = dispatch_success + 1 WHERE id = 1;",
+            )
+
+    async def increment_dispatch_failed(self) -> None:
+        await self._ensure_row()
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE metrics SET dispatch_failed = dispatch_failed + 1 WHERE id = 1;",
+            )
+
+    async def increment_circuit_breaker_trip(self) -> None:
+        await self._ensure_row()
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE metrics SET circuit_breaker_trips = circuit_breaker_trips + 1 WHERE id = 1;",
+            )
+
+    async def get_summary(self) -> dict[str, Any]:
+        await self._ensure_row()
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    generations_success,
+                    generations_failed,
+                    generations_retries,
+                    generations_total_time,
+                    dispatch_success,
+                    dispatch_failed,
+                    circuit_breaker_trips
+                FROM metrics
+                WHERE id = 1;
+                """,
+            )
+
+        if row is None:  # pragma: no cover - защитный фоллбек
+            return {
+                "generations_total": 0,
+                "generations_success": 0,
+                "generations_failed": 0,
+                "generations_retries": 0,
+                "average_generation_time": "0.00s",
+                "dispatches_success": 0,
+                "dispatches_failed": 0,
                 "circuit_breaker_trips": 0,
             }
-            self.logger.warning(f"Не удалось загрузить метрики: {e}")
 
-    def _save(self) -> None:
-        try:
-            self.path.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception as e:
-            self.logger.error(f"Не удалось сохранить метрики: {e}")
+        gen_success = int(row["generations_success"])
+        gen_failed = int(row["generations_failed"])
+        gen_retries = int(row["generations_retries"])
+        total_time = float(row["generations_total_time"])
+        disp_success = int(row["dispatch_success"])
+        disp_failed = int(row["dispatch_failed"])
+        trips = int(row["circuit_breaker_trips"])
 
-    def increment_generation_success(self) -> None:
-        self._data.setdefault("generations", {})["success"] = self._data["generations"].get("success", 0) + 1
-        self._save()
-
-    def increment_generation_failed(self) -> None:
-        self._data.setdefault("generations", {})["failed"] = self._data["generations"].get("failed", 0) + 1
-        self._save()
-
-    def increment_generation_retry(self) -> None:
-        self._data.setdefault("generations", {})["retries"] = self._data["generations"].get("retries", 0) + 1
-        self._save()
-
-    def add_generation_time(self, seconds: float) -> None:
-        generations = self._data.setdefault("generations", {})
-        generations["total_time"] = generations.get("total_time", 0) + seconds
-        self._save()
-
-    def increment_dispatch_success(self) -> None:
-        self._data.setdefault("dispatches", {})["success"] = self._data["dispatches"].get("success", 0) + 1
-        self._save()
-
-    def increment_dispatch_failed(self) -> None:
-        self._data.setdefault("dispatches", {})["failed"] = self._data["dispatches"].get("failed", 0) + 1
-        self._save()
-
-    def increment_circuit_breaker_trip(self) -> None:
-        self._data["circuit_breaker_trips"] = self._data.get("circuit_breaker_trips", 0) + 1
-        self._save()
-
-    def get_summary(self) -> dict[str, Any]:
-        gen = self._data.get("generations", {})
-        disp = self._data.get("dispatches", {})
-        total_gen = gen.get("success", 0) + gen.get("failed", 0)
-        avg_time = gen["total_time"] / total_gen if total_gen else 0
+        total_gen = gen_success + gen_failed
+        avg_time = total_time / total_gen if total_gen else 0.0
 
         return {
             "generations_total": total_gen,
-            "generations_success": gen.get("success", 0),
-            "generations_failed": gen.get("failed", 0),
-            "generations_retries": gen.get("retries", 0),
+            "generations_success": gen_success,
+            "generations_failed": gen_failed,
+            "generations_retries": gen_retries,
             "average_generation_time": f"{avg_time:.2f}s",
-            "dispatches_success": disp.get("success", 0),
-            "dispatches_failed": disp.get("failed", 0),
-            "circuit_breaker_trips": self._data.get("circuit_breaker_trips", 0),
+            "dispatches_success": disp_success,
+            "dispatches_failed": disp_failed,
+            "circuit_breaker_trips": trips,
         }

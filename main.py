@@ -14,9 +14,11 @@ from bot.support_bot import SupportBot
 from bot.wednesday_bot import WednesdayBot
 from utils.config import config
 from utils.logger import get_logger
+from utils.postgres_client import init_postgres_pool
+from utils.postgres_schema import ensure_schema
 from utils.redis_client import init_redis_pool, redis_available
 
-# Константы для магических чисел
+# Константы вместо чисел
 SLEEP_BETWEEN_BOTS_SECONDS = 5.0
 
 
@@ -110,6 +112,9 @@ class BotRunner:
             self._check_requirements()
             self.logger.info("Проверка требований завершена успешно")
             await self._init_redis_if_configured()
+            await self._init_postgres_if_configured()
+            await ensure_schema()
+            await self._init_postgres_if_configured()
 
             # Общий цикл: сначала пробуем запускать основной бот; при остановке — включаем SupportBot
             self.logger.info("Настройка обработчиков сигналов в event loop")
@@ -357,6 +362,27 @@ class BotRunner:
         except Exception as exc:
             # Явно фиксируем, что работаем без Redis, но не прерываем запуск.
             self.logger.warning(f"Redis недоступен при старте ({exc!s}). Продолжаем в режиме fallback (in‑memory).")
+
+    async def _init_postgres_if_configured(self) -> None:
+        """
+        Инициализирует пул подключений к Postgres.
+
+        Важно:
+        - Postgres используется для постоянного хранения данных (чаты, админы, лимиты и т.п.).
+        - При ошибке инициализации запуск приложения прерывается, чтобы избежать работы
+          в полудеградированном состоянии без персистентности.
+        """
+        self.logger.info("Пробую инициализировать пул Postgres")
+        try:
+            # Бот в основном IO‑bound, поэтому достаточно небольшого пула.
+            await init_postgres_pool(min_size=1, max_size=10)
+            self.logger.info("Postgres успешно инициализирован")
+        except Exception as exc:
+            self.logger.error(
+                "Не удалось инициализировать Postgres: "
+                f"{exc}. Проверьте доступность БД и переменные окружения POSTGRES_*. ",
+            )
+            raise
 
     async def _cleanup(self) -> None:
         """

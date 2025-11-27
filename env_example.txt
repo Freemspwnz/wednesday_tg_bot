@@ -164,6 +164,14 @@ TELEGRAM_VLESS_PROXY=
 # Например, 10 = каждые 10 минут
 SCHEDULER_TEST_MINUTES=0
 
+# ===== POSTGRES НАСТРОЙКИ =====
+
+POSTGRES_USER=your_postgres_user
+POSTGRES_PASSWORD=your_postgres_password
+POSTGRES_DB=your_postgres_db
+POSTGRES_HOST=your_postgres_host
+POSTGRES_PORT=your_postgres_port
+
 # ==========================================
 # ПРИМЕЧАНИЯ
 # ==========================================

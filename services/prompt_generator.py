@@ -119,9 +119,7 @@ class GigaChatClient:
         # Приоритет: путь к сертификату > флаг verify_ssl
         verify_ssl: bool | str = config.gigachat_verify_ssl
         # requests.Session.verify может быть bool или str (путь к сертификату)
-        # mypy не понимает, что verify может быть str, но requests это поддерживает
-        if isinstance(verify_ssl, bool | str):
-            self.session.verify = verify_ssl
+        self.session.verify = verify_ssl
         self.session.trust_env = False
 
         if verify_ssl is False:
@@ -149,12 +147,10 @@ class GigaChatClient:
         # Загружаем текущую модель из хранилища или используем из конфига
         from utils.models_store import ModelsStore
 
-        models_store = ModelsStore()
-        saved_model: str | None = models_store.get_gigachat_model()
-        self.model: str = saved_model or config.gigachat_model
-        if not saved_model:
-            # Сохраняем модель по умолчанию при первой инициализации
-            models_store.set_gigachat_model(self.model)
+        # В синхронном конструкторе не обращаемся к async-хранилищу моделей,
+        # используем модель по умолчанию из конфигурации.
+        _ = ModelsStore  # заглушка для сохранения зависимости и логики импорта
+        self.model = config.gigachat_model
 
         self.logger.info("GigaChat клиент инициализирован")
 
@@ -358,16 +354,9 @@ class GigaChatClient:
             Список моделей из хранилища или стандартный список
         """
         # Сначала пытаемся получить из хранилища
-        try:
-            from utils.models_store import ModelsStore
-
-            models_store = ModelsStore()
-            saved_models = models_store.get_gigachat_available_models()
-            if saved_models:
-                self.logger.debug(f"Используется сохраненный список из {len(saved_models)} моделей GigaChat")
-                return saved_models
-        except Exception as e:
-            self.logger.warning(f"Не удалось получить сохраненный список моделей: {e}")
+        # Ранее здесь использовалось асинхронное хранилище моделей.
+        # Чтобы не смешивать sync/async-код в HTTP‑клиенте, fallback теперь основан
+        # только на статическом списке ниже.
 
         # Если в хранилище нет, возвращаем стандартный список
         standard_models = [

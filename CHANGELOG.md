@@ -1,5 +1,5 @@
 # CHANGELOG
-## [X.X.X] 2025-11-27 — Обновлён CI, улучшена работа с GigaChat-промптами и fallback-механизм, добавлена Redis-интеграция для временного состояния и кэширования.
+## [X.X.X] 2025-11-27 — Обновлён CI, улучшена работа с GigaChat-промптами и fallback-механизм, добавлена Redis-интеграция для временного состояния и кэширования, подготовлена миграция персистентных данных в PostgreSQL.
 
 ### Добавлено
 - **Workflow `docker-build.yml`, `Dockerfile`, `.dockerignore`**:
@@ -32,6 +32,16 @@
   - `services/image_generator.py` использует `CircuitBreaker` из `services/rate_limiter.py` для подсчёта неудач и окна восстановления поверх Redis.
 - **Тесты для Redis‑сервисов**:
   - `tests/test_services/test_redis_services.py` — базовые проверки `PromptCache`, `UserStateStore`, `RateLimiter` и `CircuitBreaker` на in‑memory backend.
+ - **PostgreSQL‑клиент и схема БД**:
+   - `utils/postgres_client.py` — асинхронный клиент PostgreSQL с одним пулом `asyncpg.Pool` на всё приложение и вспомогательными функциями `init_postgres_pool()`, `get_postgres_pool()`, `close_postgres_pool()`.
+   - `utils/postgres_schema.py` — инициализация схемы БД через идемпотентную функцию `ensure_schema()`, создающую необходимые таблицы (`chats`, `admins`, `usage_stats`, `usage_settings`, `dispatch_registry`, `metrics`, `models_kandinsky`, `models_gigachat`).
+ - **PostgreSQL‑репозитории вместо JSON‑файлов**:
+   - `utils/chats_store.py` — `ChatsStore` переведён на хранение в таблице `chats` (список чатов рассылки).
+   - `utils/admins_store.py` — `AdminsStore` использует таблицу `admins` для хранения доп. администраторов (главный по‑прежнему задаётся через `ADMIN_CHAT_ID`).
+   - `utils/usage_tracker.py` — `UsageTracker` хранит помесячную статистику в `usage_stats` и настройки лимитов в `usage_settings`.
+   - `utils/dispatch_registry.py` — `DispatchRegistry` отслеживает отправки по слотам в таблице `dispatch_registry` вместо `dispatch_registry.json`.
+   - `utils/metrics.py` — `Metrics` агрегирует показатели в таблице `metrics` (единая строка `id=1`) вместо `metrics.json`.
+   - `utils/models_store.py` — `ModelsStore` разбит на две таблицы: `models_kandinsky` и `models_gigachat` для текущих и доступных моделей.
 
 ### Изменено
 - **`utils/config.py`**:
@@ -42,6 +52,7 @@
   - Удалена жёсткая проверка наличия файла `.env` и любые обращения к `Path(".env")`.
   - `_check_requirements()` больше не зависит от наличия `.env`, а опирается на валидацию и загрузку конфигурации в `utils.config`.
   - Добавлено логирование факта наличия/отсутствия ключевых переменных (`TELEGRAM_BOT_TOKEN`, `KANDINSKY_API_KEY`, `KANDINSKY_SECRET_KEY`, `CHAT_ID`, `ADMIN_CHAT_ID`) при старте бота.
+  - Добавлена инициализация пула PostgreSQL (`init_postgres_pool`) и вызов `ensure_schema()` перед запуском ботов; при ошибке подключения к Postgres запуск прерывается.
  - **`services/prompt_generator.py`**:
    - Добавлен класс `PromptStorage` с ответственностью за создание директории `data/prompts/`, сохранение и выбор случайного промпта из файлов.
    - `GigaChatClient` теперь сохраняет каждый успешно сгенерированный промпт в файловое хранилище для дальнейшего анализа и reuse.
@@ -52,6 +63,7 @@
   - Добавлены переменные `REDIS_URL`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`, `REDIS_PASSWORD` для конфигурации Redis.
 - **`utils/config.py`**:
   - Добавлены свойства `redis_url`, `redis_host`, `redis_port`, `redis_db`, `redis_password` c дефолтными значениями.
+  - Добавлены свойства `postgres_user`, `postgres_password`, `postgres_db`, `postgres_host`, `postgres_port` для конфигурации PostgreSQL с разумными значениями по умолчанию.
 - **`services/image_generator.py`**:
   - Встроенный in‑memory circuit‑breaker заменён на Redis‑базированный `CircuitBreaker`, с сохранением минимального локального состояния для обратной совместимости логов.
 

@@ -225,6 +225,58 @@ class Config:  # noqa: PLR0904
         """
         return Config._get_env_var("REDIS_PASSWORD")
 
+    # --- Postgres / постоянное хранилище ---
+
+    @property
+    def postgres_user(self) -> str:
+        """
+        Имя пользователя для подключения к Postgres.
+
+        Returns:
+            Имя пользователя из POSTGRES_USER или "wednesday" по умолчанию.
+        """
+        return Config._get_env_var("POSTGRES_USER") or "wednesday"
+
+    @property
+    def postgres_password(self) -> str:
+        """
+        Пароль пользователя для подключения к Postgres.
+
+        Returns:
+            Пароль из POSTGRES_PASSWORD или пустую строку, если не указан.
+        """
+        return Config._get_env_var("POSTGRES_PASSWORD") or ""
+
+    @property
+    def postgres_db(self) -> str:
+        """
+        Имя базы данных Postgres.
+
+        Returns:
+            Имя базы из POSTGRES_DB или "wednesdaydb" по умолчанию.
+        """
+        return Config._get_env_var("POSTGRES_DB") or "wednesdaydb"
+
+    @property
+    def postgres_host(self) -> str:
+        """
+        Хост Postgres.
+
+        В docker‑окружении обычно используется сервисное имя контейнера
+        (например, "postgres"), локально — "localhost".
+        """
+        return Config._get_env_var("POSTGRES_HOST") or "localhost"
+
+    @property
+    def postgres_port(self) -> int:
+        """
+        Порт Postgres.
+
+        Returns:
+            Порт из POSTGRES_PORT или 5432 по умолчанию.
+        """
+        return int(Config._get_env_var("POSTGRES_PORT") or "5432")
+
     @property
     def gigachat_auth_url(self) -> str:
         """

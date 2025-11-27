@@ -1,119 +1,104 @@
 """
-Хранилище текущих моделей с JSON-персистом.
+Хранилище текущих моделей на базе PostgreSQL.
+
+Ранее состояние хранилось в JSON-файле `data/models.json`, теперь используется
+пара таблиц `models_kandinsky` и `models_gigachat`.
 """
 
-import json
-import os
-from pathlib import Path
+from __future__ import annotations
+
 from typing import Any
 
 from utils.logger import get_logger, log_all_methods
+from utils.postgres_client import get_postgres_pool
 
 
 @log_all_methods()
 class ModelsStore:
+    """
+    Репозиторий настроек моделей Kandinsky и GigaChat.
+
+    Все методы асинхронные и используют Postgres в качестве единственного источника истины.
+    """
+
     def __init__(self, storage_path: str | None = None) -> None:
         self.logger = get_logger(__name__)
-        # Разрешаем как файл, так и директорию в MODELS_STORAGE
-        env_value = os.getenv("MODELS_STORAGE")
-        if storage_path:
-            resolved = Path(storage_path)
-        elif env_value:
-            candidate = Path(env_value)
-            resolved = candidate if candidate.suffix.lower() == ".json" else (candidate / "models.json")
-        else:
-            resolved = Path("data") / "models.json"
-        self.path = resolved
-        if self.path.parent and str(self.path.parent) not in {"", "."}:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._data: dict[str, Any] = {}
-        self._load()
 
-    def _load(self) -> None:
-        try:
-            if self.path.exists():
-                self._data = json.loads(self.path.read_text(encoding="utf-8"))
-            else:
-                self._data = {
-                    "kandinsky": {
-                        "current_pipeline_id": None,
-                        "current_pipeline_name": None,
-                        "available_models": [],
-                    },
-                    "gigachat": {
-                        "current_model": None,
-                        "available_models": [],
-                    },
-                }
-        except Exception as e:
-            self._data = {
-                "kandinsky": {
-                    "current_pipeline_id": None,
-                    "current_pipeline_name": None,
-                    "available_models": [],
-                },
-                "gigachat": {
-                    "current_model": None,
-                    "available_models": [],
-                },
-            }
-            self.logger.warning(f"Не удалось загрузить настройки моделей: {e}")
+    @staticmethod
+    async def _ensure_rows() -> None:
+        """
+        Гарантирует наличие базовых строк (id=1) в таблицах моделей.
+        """
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO models_kandinsky (id) VALUES (1) ON CONFLICT (id) DO NOTHING;",
+            )
+            await conn.execute(
+                "INSERT INTO models_gigachat (id) VALUES (1) ON CONFLICT (id) DO NOTHING;",
+            )
 
-        # Миграция старых данных: добавляем списки моделей если их нет
-        if "kandinsky" not in self._data:
-            self._data["kandinsky"] = {}
-        if "available_models" not in self._data["kandinsky"]:
-            self._data["kandinsky"]["available_models"] = []
-
-        if "gigachat" not in self._data:
-            self._data["gigachat"] = {}
-        if "available_models" not in self._data["gigachat"]:
-            self._data["gigachat"]["available_models"] = []
-
-    def _save(self) -> None:
-        try:
-            self.path.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception as e:
-            self.logger.error(f"Не удалось сохранить настройки моделей: {e}")
-
-    def set_kandinsky_model(self, pipeline_id: str, pipeline_name: str) -> None:
+    async def set_kandinsky_model(self, pipeline_id: str, pipeline_name: str) -> None:
         """Устанавливает текущую модель Kandinsky."""
-        if "kandinsky" not in self._data:
-            self._data["kandinsky"] = {}
-        self._data["kandinsky"]["current_pipeline_id"] = pipeline_id
-        self._data["kandinsky"]["current_pipeline_name"] = pipeline_name
-        self._save()
+        await self._ensure_rows()
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE models_kandinsky
+                SET current_pipeline_id = $1,
+                    current_pipeline_name = $2
+                WHERE id = 1;
+                """,
+                pipeline_id,
+                pipeline_name,
+            )
 
-    def get_kandinsky_model(self) -> tuple[str | None, str | None]:
+    async def get_kandinsky_model(self) -> tuple[str | None, str | None]:
         """Возвращает текущую модель Kandinsky (pipeline_id, pipeline_name)."""
-        kandinsky = self._data.get("kandinsky", {})
-        return (
-            kandinsky.get("current_pipeline_id"),
-            kandinsky.get("current_pipeline_name"),
-        )
+        await self._ensure_rows()
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT current_pipeline_id, current_pipeline_name
+                FROM models_kandinsky
+                WHERE id = 1;
+                """,
+            )
+        if row is None:  # pragma: no cover - защитный фоллбек
+            return None, None
+        return row["current_pipeline_id"], row["current_pipeline_name"]
 
-    def set_gigachat_model(self, model_name: str) -> None:
+    async def set_gigachat_model(self, model_name: str) -> None:
         """Устанавливает текущую модель GigaChat."""
-        if "gigachat" not in self._data:
-            self._data["gigachat"] = {}
-        self._data["gigachat"]["current_model"] = model_name
-        self._save()
+        await self._ensure_rows()
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE models_gigachat SET current_model = $1 WHERE id = 1;",
+                model_name,
+            )
 
-    def get_gigachat_model(self) -> str | None:
+    async def get_gigachat_model(self) -> str | None:
         """Возвращает текущую модель GigaChat."""
-        gigachat_data = self._data.get("gigachat", {})
-        model: str | None = gigachat_data.get("current_model")
-        return model if isinstance(model, str) else None
+        await self._ensure_rows()
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT current_model FROM models_gigachat WHERE id = 1;",
+            )
+        model = row["current_model"] if row is not None else None
+        return str(model) if isinstance(model, str) else None
 
-    def set_kandinsky_available_models(self, models: list[dict[str, Any]] | list[str]) -> None:
+    async def set_kandinsky_available_models(self, models: list[dict[str, Any]] | list[str]) -> None:
         """
         Сохраняет список доступных моделей Kandinsky.
 
         Args:
             models: Список моделей (словари с полями 'id' и 'name' или строки)
         """
-        if "kandinsky" not in self._data:
-            self._data["kandinsky"] = {}
+        await self._ensure_rows()
         # Сохраняем модели как список строк в формате "Name (ID: xxx)" для совместимости
         formatted_models: list[str] = []
         for model in models:
@@ -123,47 +108,69 @@ class ModelsStore:
                 formatted_models.append(f"{model_name} (ID: {model_id})")
             elif isinstance(model, str):
                 formatted_models.append(model)
-        self._data["kandinsky"]["available_models"] = formatted_models
-        self._save()
+
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE models_kandinsky SET available_models = $1::text[] WHERE id = 1;",
+                formatted_models,
+            )
         try:
-            self.logger.info(f"Сохранено {len(formatted_models)} моделей Kandinsky в хранилище")
-        except Exception:
+            self.logger.info(f"Сохранено {len(formatted_models)} моделей Kandinsky в Postgres")
+        except Exception:  # pragma: no cover - логирование не критично
             pass
 
-    def get_kandinsky_available_models(self) -> list[str]:
+    async def get_kandinsky_available_models(self) -> list[str]:
         """
         Возвращает список доступных моделей Kandinsky.
 
         Returns:
             Список строк моделей в формате "Name (ID: xxx)"
         """
-        kandinsky_data = self._data.get("kandinsky", {})
-        models: list[str] = kandinsky_data.get("available_models", [])
-        return list(models) if isinstance(models, list) else []
+        await self._ensure_rows()
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT available_models FROM models_kandinsky WHERE id = 1;",
+            )
+        if row is None:
+            return []
+        models = row["available_models"] or []
+        return list(models)
 
-    def set_gigachat_available_models(self, models: list[str]) -> None:
+    async def set_gigachat_available_models(self, models: list[str]) -> None:
         """
         Сохраняет список доступных моделей GigaChat.
 
         Args:
             models: Список названий моделей
         """
-        if "gigachat" not in self._data:
-            self._data["gigachat"] = {}
-        self._data["gigachat"]["available_models"] = models
-        self._save()
+        await self._ensure_rows()
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE models_gigachat SET available_models = $1::text[] WHERE id = 1;",
+                models,
+            )
         try:
-            self.logger.info(f"Сохранено {len(models)} моделей GigaChat в хранилище")
-        except Exception:
+            self.logger.info(f"Сохранено {len(models)} моделей GigaChat в Postgres")
+        except Exception:  # pragma: no cover
             pass
 
-    def get_gigachat_available_models(self) -> list[str]:
+    async def get_gigachat_available_models(self) -> list[str]:
         """
         Возвращает список доступных моделей GigaChat.
 
         Returns:
             Список названий моделей
         """
-        gigachat_data = self._data.get("gigachat", {})
-        models: list[str] = gigachat_data.get("available_models", [])
-        return list(models) if isinstance(models, list) else []
+        await self._ensure_rows()
+        pool = get_postgres_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT available_models FROM models_gigachat WHERE id = 1;",
+            )
+        if row is None:
+            return []
+        models = row["available_models"] or []
+        return list(models)
