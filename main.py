@@ -14,6 +14,7 @@ from bot.support_bot import SupportBot
 from bot.wednesday_bot import WednesdayBot
 from utils.config import config
 from utils.logger import get_logger
+from utils.redis_client import init_redis_pool, redis_available
 
 # Константы для магических чисел
 SLEEP_BETWEEN_BOTS_SECONDS = 5.0
@@ -104,10 +105,11 @@ class BotRunner:
         self.logger.info("Начало выполнения метода run()")
 
         try:
-            # Проверяем наличие необходимых файлов
+            # Проверяем конфигурацию и инициализируем Redis (если доступен)
             self.logger.info("Проверка требований перед запуском")
             self._check_requirements()
             self.logger.info("Проверка требований завершена успешно")
+            await self._init_redis_if_configured()
 
             # Общий цикл: сначала пробуем запускать основной бот; при остановке — включаем SupportBot
             self.logger.info("Настройка обработчиков сигналов в event loop")
@@ -327,6 +329,34 @@ class BotRunner:
             self.logger.error(f"Ошибка в конфигурации: {e}", exc_info=True)
             sys.exit(1)
         self.logger.info("Проверка требований завершена успешно")
+
+    async def _init_redis_if_configured(self) -> None:
+        """
+        Пытается инициализировать глобальный Redis‑клиент.
+
+        Важно:
+        - Redis не является жёсткой зависимостью — при ошибке инициализации
+          приложение продолжает работу в деградированном режиме с in‑memory
+          fallback'ами, а все Redis‑зависимые сервисы логируют режим работы.
+        """
+        self.logger.info("Пробую инициализировать Redis‑клиент (если задан конфиг)")
+        url = config.redis_url
+        try:
+            if url:
+                await init_redis_pool(url=url)
+            else:
+                await init_redis_pool(
+                    host=config.redis_host,
+                    port=config.redis_port,
+                    db=config.redis_db,
+                    password=config.redis_password,
+                )
+            self.logger.info(
+                f"Redis успешно инициализирован, режим работы: redis_available={redis_available()}",
+            )
+        except Exception as exc:
+            # Явно фиксируем, что работаем без Redis, но не прерываем запуск.
+            self.logger.warning(f"Redis недоступен при старте ({exc!s}). Продолжаем в режиме fallback (in‑memory).")
 
     async def _cleanup(self) -> None:
         """

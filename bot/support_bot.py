@@ -19,6 +19,7 @@ from bot.wednesday_bot import (
     POOL_TIMEOUT_SECONDS,
     READ_TIMEOUT_SECONDS,
 )
+from services.rate_limiter import RateLimiter
 from utils.admins_store import AdminsStore
 from utils.config import config
 from utils.logger import get_logger, log_all_methods
@@ -55,6 +56,11 @@ class SupportBot:
         self.pending_shutdown_edit: dict[str, Any] | None = None
         # Данные для цепочки запуска основного: сообщение "Запускаю..."
         self.pending_startup_edit: dict[str, Any] | None = None
+        # Лимитер на основе Redis для административных команд SupportBot
+        # (например, /log), чтобы избежать случайного "забивания" лог‑канала.
+        # В случае недоступности Redis лимитер автоматически работает в in‑memory
+        # режиме и не блокирует админа.
+        self.rate_limiter: RateLimiter = RateLimiter(prefix="rate:support:", window=60, limit=20)
 
     def setup_handlers(self) -> None:
         self.application.add_handler(CommandHandler("start", self.start_main_command))
@@ -69,6 +75,7 @@ class SupportBot:
 
         # Кладем self в bot_data на всякий случай
         self.application.bot_data["support_bot"] = self
+        self.application.bot_data["rate_limiter"] = self.rate_limiter
 
         # Этап 1: initialize с ретраями
         init_attempts = 4

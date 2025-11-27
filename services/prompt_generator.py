@@ -1,10 +1,17 @@
 """
-Клиент для работы с GigaChat API.
-Используется для генерации креативных промптов для Kandinsky.
+Клиент и инфраструктура для работы с GigaChat-промптами.
+
+Модуль отвечает за:
+- вызовы GigaChat API;
+- генерацию промптов для Kandinsky;
+- сохранение всех удачно сгенерированных промптов в `data/prompts/`;
+- подготовку структуры для будущих A/B-тестов разных вариантов промптов.
 """
 
+import random
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -22,6 +29,77 @@ MAX_TOKENS_DEFAULT = 300
 HTTP_STATUS_OK = 200
 MAX_ERROR_TEXT_LENGTH = 100
 
+# Директория, где храним все сгенерированные промпты GigaChat.
+# Выделена в константу, чтобы при A/B-тестах было проще управлять источниками/вариантами промптов.
+PROMPTS_DIR = Path("data") / "prompts"
+
+
+class PromptStorage:
+    """
+    Простое файловое хранилище промптов.
+
+    Вынесено в отдельный класс, чтобы:
+    - централизовать работу с `data/prompts/`;
+    - упростить повторное использование (генератор изображений, доп. сервисы);
+    - подготовить почву для A/B-тестов (разные источники/варианты промптов по полю `source`).
+    """
+
+    def __init__(self) -> None:
+        self.logger = get_logger(__name__)
+        self.base_dir: Path = PROMPTS_DIR
+        # Создаём директорию один раз при инициализации, чтобы не требовать ручного создания.
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+
+    def save_prompt(self, prompt: str, source: str = "gigachat") -> str | None:
+        """
+        Сохраняет промпт в файл в папке `data/prompts/`.
+
+        Args:
+            prompt: текст промпта
+            source: логическое имя источника/варианта (для A/B-тестов)
+
+        Returns:
+            Путь к сохранённому файлу или None при ошибке.
+        """
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{source}_prompt_{ts}.txt"
+        file_path = self.base_dir / filename
+
+        try:
+            file_path.write_text(prompt, encoding="utf-8")
+            self.logger.info(f"Промпт сохранён в файл: {file_path}")
+            return str(file_path)
+        except Exception as e:
+            # Ошибка сохранения не должна ломать генерацию промпта — только логируем.
+            self.logger.error(f"Ошибка при сохранении промпта в файл {file_path}: {e}", exc_info=True)
+            return None
+
+    def get_random_prompt(self) -> str | None:
+        """
+        Возвращает случайный промпт из сохранённых файлов.
+
+        Используется другими сервисами как файловый fallback при сбоях GigaChat.
+        """
+        try:
+            # Повторно гарантируем наличие папки на случай, если её удалили между запусками.
+            self.base_dir.mkdir(parents=True, exist_ok=True)
+            prompt_files = list(self.base_dir.glob("*.txt"))
+            if not prompt_files:
+                self.logger.debug(f"В папке {self.base_dir} нет сохранённых промптов для fallback")
+                return None
+
+            random_file = random.choice(prompt_files)
+            content = random_file.read_text(encoding="utf-8").strip()
+            if not content:
+                self.logger.warning(f"Файл промпта {random_file} пуст, пропускаем")
+                return None
+
+            self.logger.info(f"Выбран fallback-промпт из файла: {random_file}")
+            return content
+        except Exception as e:
+            self.logger.error(f"Ошибка при чтении fallback-промпта из файлов: {e}", exc_info=True)
+            return None
+
 
 @log_all_methods()
 class GigaChatClient:
@@ -34,6 +112,8 @@ class GigaChatClient:
         """Инициализация клиента GigaChat."""
         self.logger = get_logger(__name__)
         self.session: requests.Session = requests.Session()
+        # Отдельное хранилище промптов, чтобы сохранять все успешные ответы GigaChat.
+        self._prompt_storage = PromptStorage()
 
         # Настройка проверки SSL сертификата
         # Приоритет: путь к сертификату > флаг verify_ssl
@@ -419,6 +499,13 @@ cartoon style, bright background, dynamic pose"
                 generated_prompt = GigaChatClient._clean_prompt(generated_prompt)
 
                 self.logger.info(f"Промпт успешно сгенерирован: {generated_prompt[:100]}...")
+
+                # Сохраняем успешный промпт в файловое хранилище.
+                # Это нужно для:
+                # - последующего fallback-а на уже существующие промпты при сбоях GigaChat;
+                # - удобного анализа и A/B-тестов разных вариантов промптов.
+                self._save_prompt_to_storage(generated_prompt)
+
                 return generated_prompt
             else:
                 self.logger.error(
@@ -443,6 +530,19 @@ cartoon style, bright background, dynamic pose"
         except Exception as e:
             self.logger.error(f"Неожиданная ошибка при генерации промпта через GigaChat: {e}", exc_info=True)
             return None
+
+    def _save_prompt_to_storage(self, prompt: str) -> None:
+        """
+        Сохраняет сгенерированный промпт в `data/prompts/`.
+
+        Вынесено в отдельный метод, чтобы централизовать обработку ошибок
+        и упростить возможное переиспользование при добавлении новых типов промптов.
+        """
+        try:
+            self._prompt_storage.save_prompt(prompt, source="gigachat")
+        except Exception as e:
+            # Ошибка записи промпта не критична для работы бота, поэтому только логируем.
+            self.logger.error(f"Ошибка при сохранении промпта в PromptStorage: {e}", exc_info=True)
 
     @staticmethod
     def _clean_prompt(prompt: str) -> str:

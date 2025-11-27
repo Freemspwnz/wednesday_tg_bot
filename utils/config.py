@@ -26,7 +26,7 @@ def _load_dotenv_if_needed() -> None:
     _DOTENV_STATE["loaded"] = True
 
 
-class Config:
+class Config:  # noqa: PLR0904
     """
     Класс для управления конфигурацией приложения.
     Содержит все необходимые настройки и токены.
@@ -61,7 +61,7 @@ class Config:
 
             logger = logging.getLogger(__name__)
             for var in missing_vars:
-                logger.error("Отсутствует обязательная переменная окружения: %s", var)
+                logger.error(f"Отсутствует обязательная переменная окружения: {var}")
 
             raise ValueError(
                 "Отсутствуют обязательные переменные окружения: "
@@ -183,6 +183,47 @@ class Config:
             Количество попыток из переменной MAX_RETRIES или 3 по умолчанию
         """
         return int(Config._get_env_var("MAX_RETRIES") or "3")
+
+    # --- Redis / кэш / состояние ---
+
+    @property
+    def redis_url(self) -> str | None:
+        """
+        Полный URL для подключения к Redis.
+
+        Пример:
+            redis://localhost:6379/0
+            rediss://user:pass@host:6380/1
+        """
+        return Config._get_env_var("REDIS_URL")
+
+    @property
+    def redis_host(self) -> str:
+        """
+        Хост Redis при отсутствии REDIS_URL.
+        """
+        return Config._get_env_var("REDIS_HOST") or "localhost"
+
+    @property
+    def redis_port(self) -> int:
+        """
+        Порт Redis при отсутствии REDIS_URL.
+        """
+        return int(Config._get_env_var("REDIS_PORT") or "6379")
+
+    @property
+    def redis_db(self) -> int:
+        """
+        Номер базы Redis при отсутствии REDIS_URL.
+        """
+        return int(Config._get_env_var("REDIS_DB") or "0")
+
+    @property
+    def redis_password(self) -> str | None:
+        """
+        Пароль для Redis (если требуется).
+        """
+        return Config._get_env_var("REDIS_PASSWORD")
 
     @property
     def gigachat_auth_url(self) -> str:

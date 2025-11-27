@@ -13,7 +13,10 @@ from telegram.request import HTTPXRequest
 
 from bot.handlers import CommandHandlers
 from services.image_generator import ImageGenerator
+from services.prompt_cache import PromptCache
+from services.rate_limiter import RateLimiter
 from services.scheduler import TaskScheduler
+from services.user_state_store import UserStateStore
 from utils.chats_store import ChatsStore
 from utils.config import config
 from utils.dispatch_registry import DispatchRegistry
@@ -83,6 +86,15 @@ class WednesdayBot:
         self.chats: ChatsStore = ChatsStore()
         self.dispatch_registry: DispatchRegistry = DispatchRegistry()
         self.metrics: Metrics = Metrics()
+        # Redis‑сервисы (поднимаются один раз и переиспользуются через bot_data):
+        # - PromptCache: быстрый кэш промптов/параметров генерации;
+        # - UserStateStore: временное состояние пользователей (диалоги, флаги и т.п.);
+        # - RateLimiter: базовый лимитер для административных/ручных операций.
+        # Эти сервисы построены поверх Redis, но автоматически деградируют в in‑memory режим,
+        # если Redis недоступен, поэтому их безопасно инициализировать без жёсткой зависимости.
+        self.prompt_cache: PromptCache = PromptCache()
+        self.user_state_store: UserStateStore = UserStateStore()
+        self.rate_limiter: RateLimiter = RateLimiter(prefix="rate:wednesday:", window=60, limit=100)
         # Данные для пост-старта (например, редактирование сообщения из SupportBot)
         self.pending_startup_edit: dict[str, Any] | None = None
         # Данные для пост-остановки (например, редактирование сообщения об остановке)
@@ -615,6 +627,10 @@ class WednesdayBot:
             self.application.bot_data["usage"] = self.usage
             self.application.bot_data["chats"] = self.chats
             self.application.bot_data["metrics"] = self.metrics
+            # Redis‑обёртки тоже доступны обработчикам через bot_data:
+            self.application.bot_data["prompt_cache"] = self.prompt_cache
+            self.application.bot_data["user_state_store"] = self.user_state_store
+            self.application.bot_data["rate_limiter"] = self.rate_limiter
             # Сохраняем ссылку на экземпляр бота для управленческих команд (/stop)
             self.application.bot_data["bot"] = self
 

@@ -104,11 +104,13 @@ repos:
     hooks:
       - id: mypy
         name: Mypy type checker
-        # Автоматически использует [tool.mypy] из pyproject.toml
+        pass_filenames: false   # не подставлять изменённые файлы
+        args: ["."]
         additional_dependencies:
           - types-requests
           - types-python-dateutil
           - aiohttp==3.13.1
+          - redis==5.2.1
         # Дополнительные типы для внешних библиотек
 
   # ---------------------------

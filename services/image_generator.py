@@ -25,7 +25,8 @@ else:
 
 from PIL import Image
 
-from services.prompt_generator import GigaChatClient
+from services.prompt_generator import GigaChatClient, PromptStorage
+from services.rate_limiter import CircuitBreaker
 from utils.config import ImageConfig, config
 from utils.logger import get_logger, log_all_methods
 
@@ -64,11 +65,23 @@ class ImageGenerator:
         self.timeout: int = config.generation_timeout
         self.max_retries: int = config.max_retries
 
-        # Circuit breaker для API
+        # Circuit breaker для API.
+        # Исторически счётчики хранились в памяти, что сбрасывало состояние при рестарте.
+        # Теперь используем Redis‑базированный CircuitBreaker, чтобы:
+        # - разделять счётчики между воркерами/процессами;
+        # - сохранять окно ошибок даже при перезапуске приложения.
+        #
+        # Локальные поля оставлены только для обратной совместимости логов
+        # и могут быть удалены в будущих версиях.
         self.circuit_breaker_failures: int = 0
         self.circuit_breaker_threshold: int = CIRCUIT_BREAKER_THRESHOLD
         self.circuit_breaker_cooldown: int = CIRCUIT_BREAKER_COOLDOWN_SECONDS
         self.circuit_breaker_open_until: float | None = None
+        self._circuit_breaker = CircuitBreaker(
+            key="cb:kandinsky_api",
+            threshold=CIRCUIT_BREAKER_THRESHOLD,
+            window=CIRCUIT_BREAKER_COOLDOWN_SECONDS,
+        )
 
         # Промпт для генерации жабы (fallback)
         self.frog_prompt: list[str] = ImageConfig.FROG_PROMPTS
@@ -87,6 +100,10 @@ class ImageGenerator:
         # Инициализация GigaChat клиента для генерации промптов
         self.gigachat_enabled: bool = False
         self.gigachat_client: GigaChatClient | None = None
+        # Хранилище промптов:
+        # - позволяет переиспользовать уже сгенерированные GigaChat-промпты при падении API;
+        # - даёт единое место для будущих A/B-тестов разных вариантов промптов.
+        self.prompt_storage: PromptStorage = PromptStorage()
         if config.gigachat_authorization_key:
             try:
                 self.gigachat_client = GigaChatClient()
@@ -142,18 +159,22 @@ class ImageGenerator:
 
         start_time = time.time()
 
-        # Проверяем circuit breaker
-        if self.circuit_breaker_open_until is not None:
-            if time.time() < self.circuit_breaker_open_until:
-                remaining = int(self.circuit_breaker_open_until - time.time())
-                self.logger.warning(f"Circuit breaker открыт, API временно недоступен. Повтор через {remaining}с")
+        # Проверяем circuit breaker (Redis‑базированный).
+        try:
+            if await self._circuit_breaker.is_open():
+                remaining = self.circuit_breaker_cooldown
+                self.logger.warning(
+                    "Circuit breaker для Kandinsky уже открыт (Redis). "
+                    f"Запрос к API пропущен до окончания окна cooldown ({remaining} c)",
+                )
                 if metrics:
                     metrics.increment_circuit_breaker_trip()
                 return None
-            else:
-                self.logger.info("Circuit breaker восстановлен, пробуем снова")
-                self.circuit_breaker_open_until = None
-                self.circuit_breaker_failures = 0
+        except Exception as cb_err:
+            # В случае проблем с Redis не блокируем генерацию — работаем как раньше.
+            self.logger.warning(
+                f"Не удалось проверить состояние circuit breaker в Redis, продолжаем генерацию: {cb_err!s}",
+            )
 
         self.logger.info("Начинаю генерацию изображения жабы")
 
@@ -194,17 +215,12 @@ class ImageGenerator:
             except Exception as e:
                 self.logger.error(f"Ошибка при генерации (попытка {attempt + 1}): {e}")
                 self.circuit_breaker_failures += 1
-
-                # Активируем circuit breaker при превышении порога
-                if self.circuit_breaker_failures >= self.circuit_breaker_threshold:
-                    import time
-
-                    self.circuit_breaker_open_until = time.time() + self.circuit_breaker_cooldown
-                    self.logger.error(
-                        f"Circuit breaker активирован на {self.circuit_breaker_cooldown}с "
-                        f"из-за {self.circuit_breaker_failures} ошибок",
+                try:
+                    await self._circuit_breaker.record_failure()
+                except Exception as cb_rec_err:
+                    self.logger.warning(
+                        f"Не удалось записать ошибку в Redis‑based circuit breaker: {cb_rec_err!s}",
                     )
-                    break
 
                 # Если это не последняя попытка, ждем перед следующей
                 if attempt < self.max_retries - 1:
@@ -365,11 +381,9 @@ class ImageGenerator:
                     models_list = [f"Ошибка: {str(e)[:50]}"]
 
                 self.logger.debug(
-                    "Завершена проверка статуса Kandinsky: ok=%s, models=%d, current=(%s, %s)",
-                    status_ok,
-                    len(models_list),
-                    current_pipeline_id,
-                    current_pipeline_name,
+                    f"Завершена проверка статуса Kandinsky: "
+                    f"ok={status_ok}, models={len(models_list)}, "
+                    f"current=({current_pipeline_id}, {current_pipeline_name})",
                 )
                 return status_ok, status_message, models_list, (current_pipeline_id, current_pipeline_name)
 
@@ -709,20 +723,53 @@ class ImageGenerator:
         """
         Генерирует промпт для Kandinsky через GigaChat или использует fallback.
 
+        Порядок:
+        1. Попытка получить промпт из GigaChat.
+        2. При любой ошибке GigaChat — берём случайный промпт из сохранённых файлов `data/prompts/`.
+        3. Если сохранённых промптов нет — вызывающий код использует статический fallback.
+
         Returns:
             Сгенерированный промпт или None при ошибке
         """
-        # Пытаемся сгенерировать через GigaChat
+        # 1. Пытаемся сгенерировать промпт через GigaChat.
         if self.gigachat_enabled and self.gigachat_client:
             try:
                 prompt = self.gigachat_client.generate_prompt_for_kandinsky()
                 if prompt:
+                    # Сам промпт уже сохранён внутри GigaChatClient в PromptStorage.
+                    # Здесь просто возвращаем его как "основной" вариант для текущей стратегии.
                     return prompt
                 else:
-                    self.logger.warning("GigaChat вернул пустой промпт, используем fallback")
+                    self.logger.warning(
+                        "GigaChat вернул пустой промпт, пробуем использовать сохранённые промпты из файлов",
+                    )
             except Exception as e:
-                self.logger.error(f"Ошибка при генерации промпта через GigaChat: {e}", exc_info=True)
+                # Любая ошибка GigaChat переводит нас на файловый fallback.
+                self.logger.error(
+                    f"Ошибка при генерации промпта через GigaChat, используем файловый fallback: {e}",
+                    exc_info=True,
+                )
 
+        # 2. Файловый fallback: пытаемся взять случайный промпт из `data/prompts/`.
+        try:
+            file_prompt = self.prompt_storage.get_random_prompt()
+        except Exception as e:  # на всякий случай не ломаем основную логику
+            self.logger.error(
+                f"Ошибка при получении fallback-промпта из файлового хранилища: {e}",
+                exc_info=True,
+            )
+            file_prompt = None
+
+        if file_prompt:
+            self.logger.info("Используем fallback-промпт из сохранённых файлов data/prompts")
+            return file_prompt
+
+        # 3. Если даже файлового fallback-а нет — возвращаем None,
+        # вызывающий код перейдёт к статическому промпту из `ImageConfig.FROG_PROMPTS`.
+        self.logger.warning(
+            "Файловый fallback-промпт недоступен (нет сохранённых промптов). "
+            "Будет использован статический fallback-промпт.",
+        )
         return None
 
     @staticmethod

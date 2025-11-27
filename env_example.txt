@@ -54,6 +54,25 @@ GENERATION_TIMEOUT=60
 # При неудаче бот попробует еще раз
 MAX_RETRIES=3
 
+# ===== REDIS (опционально, для кэша и временного состояния) =====
+
+# Полный URL подключения к Redis (если задан, перекрывает host/port/db/password)
+# Примеры:
+# REDIS_URL=redis://localhost:6379/0
+# REDIS_URL=rediss://user:pass@host:6380/1
+REDIS_URL=
+
+# Альтернативная форма задания подключения, если REDIS_URL не используется:
+# Хост и порт Redis
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+# Номер базы (по умолчанию 0)
+REDIS_DB=0
+
+# Пароль (если настроен на сервере Redis)
+REDIS_PASSWORD=
+
 # ===== GIGACHAT НАСТРОЙКИ (для генерации промптов) =====
 
 # Authorization key для GigaChat API (Base64 encoded)
