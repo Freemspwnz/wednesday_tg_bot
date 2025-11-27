@@ -26,13 +26,16 @@ wednesday_tg_bot/
 ├── utils/
 │   ├── config.py           # Конфигурация и валидация
 │   ├── logger.py           # Логирование (loguru)
-│   ├── chats_store.py      # Хранилище чатов
-│   ├── usage_tracker.py    # Учёт ручных генераций и лимитов
-│   ├── dispatch_registry.py# Антидубли рассылок
-│   ├── models_store.py     # Список доступных моделей
-│   ├── admins_store.py     # Дополнительные администраторы
-│   └── metrics.py          # Метрики производительности
-├── data/                   # JSON-хранилища (чаты, usage, dispatch, metrics, models, frogs/)
+│   ├── redis_client.py     # Асинхронный Redis‑клиент с in‑memory fallback
+│   ├── postgres_client.py  # Пул подключений к PostgreSQL (asyncpg)
+│   ├── postgres_schema.py  # Инициализация и миграция схемы БД
+│   ├── chats_store.py      # Хранилище чатов (PostgreSQL)
+│   ├── usage_tracker.py    # Учёт ручных генераций и лимитов (PostgreSQL)
+│   ├── dispatch_registry.py# Антидубли рассылок (PostgreSQL)
+│   ├── models_store.py     # Список доступных моделей (PostgreSQL)
+│   ├── admins_store.py     # Дополнительные администраторы (PostgreSQL)
+│   └── metrics.py          # Метрики производительности (PostgreSQL)
+├── data/                   # Вспомогательные данные (архив изображений frogs/, временные JSON при миграции)
 ├── logs/                   # Логи с ротацией
 ├── requirements.txt
 └── README.md
@@ -196,106 +199,51 @@ wednesday_tg_bot/
 - Цветной вывод в консоль
 - Подробный формат с стеком вызовов
 
-### 8. Хранилище чатов (utils/chats_store.py)
+### 8. Хранилище чатов (utils/chats_store.py, PostgreSQL)
 
 **Ответственность:**
-- Сохранение списка активных чатов
+- Сохранение списка активных чатов рассылки
 - Добавление/удаление чатов
-- Персистентность в JSON
+- Получение списка chat_id для рассылки
 
-**Формат данных:**
-```json
-{
-  "chats": {
-    "chat_id": {
-      "title": "Chat Name"
-    }
-  }
-}
-```
+**Хранилище:**
+- Таблица `chats` в PostgreSQL, все операции — асинхронные.
 
-### 9. Трекер использования (utils/usage_tracker.py)
+### 9. Трекер использования (utils/usage_tracker.py, PostgreSQL)
 
 **Ответственность:**
 - Отслеживание генераций по месяцам
-- Проверка лимитов
+- Проверка лимитов и квот
 - Управление доступом к `/frog`
 
-**Функции:**
-- `increment(count)` — увеличить счетчик
-- `get_month_total()` — получить текущий месяц
-- `can_use_frog()` — проверка лимитов
-- `get_limits_info()` — информация о лимитах
+**Хранилище:**
+- Таблица `usage_stats` — помесячные счётчики
+- Таблица `usage_settings` — глобальные настройки квот (единая строка `id=1`)
 
-**Лимиты:**
-- Monthly quota: 100 генераций
-- Frog threshold: 70 генераций
-- Значения квоты и порога хранятся в `usage_stats.json` (секция `settings`) и обновляются при вызове админ-команд
+**Ключевые методы:**
+- `await increment(count)` — увеличить счётчик
+- `await get_month_total()` — получить значение за текущий месяц
+- `await can_use_frog()` — можно ли ещё вызывать `/frog`
+- `await get_limits_info()` — `(total, threshold, quota)` для отображения в статусе.
 
-**Формат данных:**
-```json
-{
-  "2025-01": {
-    "count": 45
-  }
-}
-```
-
-### 10. Реестр отправок (utils/dispatch_registry.py)
+### 10. Реестр отправок (utils/dispatch_registry.py, PostgreSQL)
 
 **Ответственность:**
 - Предотвращение дублирования отправок
-- Отслеживание по тайм-слотам
+- Отслеживание статуса отправки по временным слотам
 - Очистка старых записей
 
-**Формат ключа:**
-`{date}_{time}:{chat_id}`
+**Хранилище:**
+- Таблица `dispatch_registry` в PostgreSQL, ключевые поля: дата, слот, chat_id.
 
-**Пример:**
-`2025-01-08_12:00:123456789`
-
-**Retention:** 7 дней
-
-**Формат данных:**
-```json
-{
-  "dispatches": {
-    "2025-01-08_12:00:123456789": {
-      "ts": "2025-01-08T09:00:00"
-    }
-  }
-}
-```
-
-### 11. Метрики (utils/metrics.py)
+### 11. Метрики (utils/metrics.py, PostgreSQL)
 
 **Ответственность:**
-- Отслеживание производительности
-- Статистика работы системы
-- Health-check данные
+- Отслеживание производительности и стабильности
+- Агрегированные метрики генераций и рассылок
 
-**Метрики:**
-- Генерации (успешные, всего, процент успеха)
-- Время генерации (total, average)
-- Circuit breaker trips
-- Dispatch statistics
-
-**Формат данных:**
-```json
-{
-  "generations": {
-    "success": 120,
-    "failed": 5,
-    "retries": 15,
-    "total_time": 1200.5
-  },
-  "dispatches": {
-    "success": 350,
-    "failed": 2
-  },
-  "circuit_breaker_trips": 1
-}
-```
+**Хранилище:**
+- Таблица `metrics` с одной агрегирующей строкой `id=1` в PostgreSQL.
 
 ## Потоки данных
 

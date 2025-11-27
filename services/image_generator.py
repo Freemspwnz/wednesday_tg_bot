@@ -168,7 +168,10 @@ class ImageGenerator:
                     f"Запрос к API пропущен до окончания окна cooldown ({remaining} c)",
                 )
                 if metrics:
-                    metrics.increment_circuit_breaker_trip()
+                    try:
+                        await metrics.increment_circuit_breaker_trip()
+                    except Exception as exc:
+                        self.logger.warning(f"Не удалось обновить метрики circuit breaker: {exc}")
                 return None
         except Exception as cb_err:
             # В случае проблем с Redis не блокируем генерацию — работаем как раньше.
@@ -205,7 +208,7 @@ class ImageGenerator:
                         try:
                             await metrics.increment_generation_success()
                             await metrics.add_generation_time(elapsed)
-                            if attempt > 0:
+                        if attempt > 0:
                                 await metrics.increment_generation_retry()
                         except Exception as exc:
                             self.logger.warning(f"Не удалось обновить метрики успешной генерации: {exc}")
@@ -345,8 +348,7 @@ class ImageGenerator:
                     from utils.models_store import ModelsStore
 
                     models_store = ModelsStore()
-                    current_pipeline_id, current_pipeline_name = models_store.get_kandinsky_model()
-
+                    current_pipeline_id, current_pipeline_name = await models_store.get_kandinsky_model()
                     self.logger.debug("Выполняю запрос списка pipelines для dry-run статуса")
                     async with session.get(f"{self.base_url}/key/api/v1/pipelines", headers=headers) as response:
                         if response.status == HTTP_STATUS_OK:
@@ -356,8 +358,10 @@ class ImageGenerator:
                             if isinstance(pipelines_data, list) and len(pipelines_data) > 0:
                                 # Сохраняем список моделей в хранилище
                                 if save_models:
-                                    models_store.set_kandinsky_available_models(pipelines_data)
-                                    self.logger.debug(f"Сохранен список из {len(pipelines_data)} моделей Kandinsky")
+                                    await models_store.set_kandinsky_available_models(pipelines_data)
+                                    self.logger.debug(
+                                        f"Сохранен список из {len(pipelines_data)} моделей Kandinsky",
+                                    )
 
                                 for pipeline in pipelines_data:
                                     model_name: str = str(pipeline.get("name", "Unknown"))
@@ -416,7 +420,9 @@ class ImageGenerator:
         from utils.models_store import ModelsStore
 
         models_store = ModelsStore()
-        saved_pipeline_id, saved_pipeline_name = models_store.get_kandinsky_model()
+        saved_pipeline_id: str | None
+        saved_pipeline_name: str | None
+        saved_pipeline_id, saved_pipeline_name = await models_store.get_kandinsky_model()
 
         try:
             async with session.get(f"{self.base_url}/key/api/v1/pipelines", headers=headers) as response:
@@ -442,7 +448,7 @@ class ImageGenerator:
                         pipeline_id: str = str(pipeline_id_raw) if pipeline_id_raw is not None else ""
                         pipeline_name: str = str(pipeline_name_raw)
                         # Сохраняем выбранную модель
-                        models_store.set_kandinsky_model(pipeline_id, pipeline_name)
+                        await models_store.set_kandinsky_model(pipeline_id, pipeline_name)
                         self.logger.info(f"Получен pipeline ID: {pipeline_id} ({pipeline_name})")
                         return pipeline_id
                     else:
@@ -503,7 +509,10 @@ class ImageGenerator:
                                     from utils.models_store import ModelsStore
 
                                     models_store = ModelsStore()
-                                    models_store.set_kandinsky_model(matched_pipeline_id, matched_model_name)
+                                    await models_store.set_kandinsky_model(
+                                        matched_pipeline_id,
+                                        matched_model_name,
+                                    )
                                     self.logger.info(
                                         f"Модель Kandinsky установлена: {matched_model_name} "
                                         f"(ID: {matched_pipeline_id})",
@@ -526,7 +535,10 @@ class ImageGenerator:
                                 from utils.models_store import ModelsStore
 
                                 models_store = ModelsStore()
-                                models_store.set_kandinsky_model(selected_pipeline_id, selected_model_name)
+                                await models_store.set_kandinsky_model(
+                                    selected_pipeline_id,
+                                    selected_model_name,
+                                )
                                 self.logger.info(
                                     f"Модель Kandinsky установлена: {selected_model_name} (ID: {selected_pipeline_id})",
                                 )

@@ -306,13 +306,9 @@ class GigaChatClient:
 
                 if models_list:
                     self.logger.info(f"Получен список из {len(models_list)} моделей GigaChat через API")
-                    # Сохраняем список моделей в хранилище
-                    if save_models:
-                        from utils.models_store import ModelsStore
-
-                        models_store = ModelsStore()
-                        models_store.set_gigachat_available_models(models_list)
-                        self.logger.debug(f"Сохранен список из {len(models_list)} моделей GigaChat")
+                    # Ранее здесь список моделей сохранялся в async‑хранилище ModelsStore.
+                    # Так как клиент GigaChat синхронный, чтобы не мешать event loop,
+                    # сохраняем список только в памяти и не трогаем async‑репозиторий.
                     return models_list
                 else:
                     self.logger.warning("API вернул пустой список моделей, используем сохраненный список")
@@ -348,17 +344,12 @@ class GigaChatClient:
 
     def _get_fallback_models(self) -> list[str]:
         """
-        Возвращает список моделей GigaChat из хранилища или стандартный список (fallback).
+        Возвращает стандартный список моделей GigaChat (fallback).
 
-        Returns:
-            Список моделей из хранилища или стандартный список
+        Async‑хранилище моделей используется только в асинхронных слоях бота.
+        Синхронный HTTP‑клиент GigaChat не обращается к Postgres‑репозиторию
+        напрямую, чтобы не блокировать event loop.
         """
-        # Сначала пытаемся получить из хранилища
-        # Ранее здесь использовалось асинхронное хранилище моделей.
-        # Чтобы не смешивать sync/async-код в HTTP‑клиенте, fallback теперь основан
-        # только на статическом списке ниже.
-
-        # Если в хранилище нет, возвращаем стандартный список
         standard_models = [
             "GigaChat",
             "GigaChat-2",
@@ -378,24 +369,17 @@ class GigaChatClient:
 
     def set_model(self, model_name: str) -> bool:
         """
-        Устанавливает текущую модель GigaChat.
+        Устанавливает текущую модель GigaChat только в памяти клиента.
 
-        Args:
-            model_name: Название модели
-
-        Returns:
-            True если модель установлена, False если модель не найдена в списке доступных
+        Persist‑хранилище моделей для GigaChat используется в async‑слоях бота,
+        чтобы не смешивать sync/async‑код внутри HTTP‑клиента.
         """
         available_models = self.get_available_models()
         if model_name in available_models:
-            from utils.models_store import ModelsStore
-
-            models_store = ModelsStore()
-            models_store.set_gigachat_model(model_name)
             self.model = model_name
             self.logger.info(f"Модель GigaChat изменена на: {model_name}")
             return True
-        else:
+
             self.logger.warning(f"Попытка установить несуществующую модель: {model_name}")
             return False
 
@@ -447,12 +431,8 @@ cartoon style, bright background, dynamic pose"
                 "Accept": "application/json",
             }
 
-            # Получаем актуальную модель из хранилища
-            from utils.models_store import ModelsStore
-
-            models_store = ModelsStore()
-            current_model = models_store.get_gigachat_model() or self.model
-            self.model = current_model  # Обновляем для следующего использования
+            # Используем текущее значение self.model (без обращения к async‑хранилищу)
+            current_model = self.model
 
             payload = {
                 "model": current_model,

@@ -1,7 +1,24 @@
 # CHANGELOG
-## [X.X.X] 2025-11-27 — Обновлён CI, улучшена работа с GigaChat-промптами и fallback-механизм, добавлена Redis-интеграция для временного состояния и кэширования, подготовлена миграция персистентных данных в PostgreSQL.
+## [X.X.X] 2025-11-27 — Обновлён CI, улучшена работа с GigaChat-промптами и fallback-механизм, добавлена Redis-интеграция для временного состояния и кэширования, миграция персистентных данных в PostgreSQL завершена, устранены ошибки типизации.
 
 ### Добавлено
+- **Интеграционные тесты для команд бота**:
+  - `tests/test_bot/test_handlers.py` — добавлены интеграционные тесты `test_status_command_integration_with_postgres_stores` и `test_force_send_command_integration_with_postgres_stores`, использующие реальные async‑сторы PostgreSQL для проверки работы команд `/status` и `/force_send`.
+- **CI/CD с поддержкой PostgreSQL и Redis**:
+  - `.github/workflows/pytest-check.yml` — добавлены сервисные контейнеры Postgres 16 и Redis 7 для запуска тестов в изолированной среде.
+  - Настроены healthchecks для автоматического ожидания готовности БД перед запуском тестов.
+  - Добавлена проверка готовности сервисов через Python‑скрипт перед выполнением тестов.
+  - Используются безопасные тестовые учетные данные для изолированной CI‑среды (без хардкода реальных паролей).
+- **Локальная тестовая инфраструктура**:
+  - `docker-compose.test.yml` — отдельный docker-compose файл для тестовой среды с Postgres 16-alpine и Redis 7-alpine.
+  - Контейнеры используют `tmpfs` для данных, обеспечивая быструю очистку после тестов и изоляцию от продакшн БД.
+  - `Makefile` — разделены команды тестирования: `make test` (только тесты + junit.xml), `make test-cov` (тесты с покрытием + coverage.xml + junit.xml).
+  - Команды тестирования автоматически запускают тестовые контейнеры, ждут их готовности, выполняют тесты и очищают контейнеры после завершения.
+  - Добавлены вспомогательные команды: `make test-up` (запуск контейнеров), `make test-down` (остановка), `make test-no-containers` (запуск тестов без контейнеров для уже запущенных БД).
+- **Боевой запуск через Docker**:
+  - `Makefile` — команда `make run` полностью переработана: автоматически очищает и пересобирает Docker-образ бота, поднимает боевые контейнеры Postgres и Redis, ожидает их готовности и запускает бота.
+  - Команда `make build` теперь автоматически очищает старый образ перед сборкой нового.
+  - Удалены неиспользуемые команды: `run-local`, `init-volumes`, `sync-volumes`.
 - **Workflow `docker-build.yml`, `Dockerfile`, `.dockerignore`**:
   - Автоматически создаёт Docker image на основе `Dockerfile` и пушит его в GHCR.
 - **Логика ленивой загрузки `.env` в `utils/config.py`**:
@@ -42,6 +59,10 @@
    - `utils/dispatch_registry.py` — `DispatchRegistry` отслеживает отправки по слотам в таблице `dispatch_registry` вместо `dispatch_registry.json`.
    - `utils/metrics.py` — `Metrics` агрегирует показатели в таблице `metrics` (единая строка `id=1`) вместо `metrics.json`.
    - `utils/models_store.py` — `ModelsStore` разбит на две таблицы: `models_kandinsky` и `models_gigachat` для текущих и доступных моделей.
+ - **Документация и запуск**:
+   - `README.md` обновлён под новую архитектуру: Postgres‑сторы вместо JSON‑файлов, единый Redis‑клиент и быстрый старт через `docker compose up`.
+   - `docs/INSTALLATION.md` переработан: добавлен основной сценарий запуска через `docker-compose` (Postgres + Redis + бот), убраны упоминания JSON‑хранилищ метрик/usage, описаны варианты нативного запуска.
+   - `docs/PROJECT_SUMMARY.md` обновлён: разделы по `ChatsStore`, `UsageTracker`, `DispatchRegistry`, `Metrics`, `ModelsStore` переписаны под PostgreSQL, структура `utils/` дополнена `redis_client.py`, `postgres_client.py`, `postgres_schema.py`.
  - **Async-проводка бота и тестов для работы с Postgres**:
    - `bot/wednesday_bot.py` — методы отправки жабы и обработки добавления/удаления чатов теперь используют async‑репозитории (`ChatsStore`, `DispatchRegistry`, `UsageTracker`, `Metrics`, `AdminsStore`) через `await`, без изменения внешнего API.
    - `bot/support_bot.py` — проверки прав администратора и рассылка уведомлений обрабатываются через async‑интерфейс `AdminsStore`.
@@ -56,6 +77,24 @@
   - Обязательные переменные конфигурации (`TELEGRAM_BOT_TOKEN`, `KANDINSKY_API_KEY`, `KANDINSKY_SECRET_KEY`, `CHAT_ID`, `ADMIN_CHAT_ID`) теперь полностью завязаны на переменные окружения контейнера с fallback на локальный `.env`.
   - Опциональные переменные (`GIGACHAT_AUTHORIZATION_KEY`, `SCHEDULER_SEND_TIMES`, `SCHEDULER_WEDNESDAY_DAY`, `SCHEDULER_TZ` и др.) также читаются через единый слой доступа к окружению с поддержкой fallback.
   - Сообщение об ошибке при отсутствии обязательных переменных теперь явно указывает на необходимость проверки окружения контейнера и/или локального `.env`.
+  - Функция `_load_dotenv_if_needed()` обёрнута в `try-except` для graceful handling ошибок доступа к `.env` (например, `PermissionError` при отсутствии прав чтения), что позволяет тестам работать без локального `.env` файла.
+- **`tests/conftest.py`**:
+  - Фикстура `base_env` теперь устанавливает безопасные тестовые значения для Postgres (`test_user`/`test_password_ci_2024`) вместо реальных учетных данных.
+  - Добавлены переменные окружения `SCHEDULER_SEND_TIMES`, `SCHEDULER_WEDNESDAY_DAY`, `SCHEDULER_TZ` в `base_env` для предотвращения вызовов `load_dotenv()` при инициализации `SchedulerConfig` во время коллекции тестов.
+- **`.github/workflows/pytest-check.yml`**:
+  - Убраны хардкод реальных паролей БД из workflow файла; используются безопасные тестовые значения (`test_user`/`test_password_ci_2024`) только для изолированной CI‑среды.
+  - Добавлены переменные окружения для Postgres и Redis на уровне job'а для корректной работы тестов в CI.
+- **`docker-compose.yml`**:
+  - Добавлены healthchecks для Postgres и Redis для контроля готовности сервисов.
+  - Сервис `bot` теперь использует только образ `wednesday-bot:local` (без секции `build`), который собирается через `make build`.
+  - Добавлены `depends_on` с условиями `service_healthy` для гарантированного запуска бота только после готовности БД.
+  - Сервис `bot` переопределяет `POSTGRES_HOST` и `REDIS_HOST` для работы внутри Docker-сети.
+- **`Makefile`**:
+  - Команда `make test` разделена на две: `make test` (без покрытия, только junit.xml) и `make test-cov` (с покрытием, coverage.xml + junit.xml).
+  - Команда `make run` переработана для полного боевого запуска: сборка образа, поднятие БД, ожидание готовности сервисов, запуск бота.
+  - Команда `make build` автоматически очищает старый образ перед сборкой нового.
+  - Команда `make ci` обновлена: использует `make test-cov` и добавлена проверка форматирования через `make format-check`.
+  - Удалены неиспользуемые команды: `run-local`, `init-volumes`, `sync-volumes`.
 - **`main.py`**:
   - Удалена жёсткая проверка наличия файла `.env` и любые обращения к `Path(".env")`.
   - `_check_requirements()` больше не зависит от наличия `.env`, а опирается на валидацию и загрузку конфигурации в `utils.config`.
@@ -74,6 +113,18 @@
   - Добавлены свойства `postgres_user`, `postgres_password`, `postgres_db`, `postgres_host`, `postgres_port` для конфигурации PostgreSQL с разумными значениями по умолчанию.
 - **`services/image_generator.py`**:
   - Встроенный in‑memory circuit‑breaker заменён на Redis‑базированный `CircuitBreaker`, с сохранением минимального локального состояния для обратной совместимости логов.
+
+### Исправлено
+- **`utils/config.py`**:
+  - Обработка `PermissionError` и других исключений при загрузке `.env` файла: добавлен `try-except` блок в `_load_dotenv_if_needed()` для graceful fallback, позволяющий тестам работать без локального `.env` файла или при отсутствии прав доступа.
+- **Типизация и стиль кода**:
+  - Устранены все ошибки типизации `mypy`: добавлены `await` для всех асинхронных вызовов в `services/prompt_generator.py`, `services/image_generator.py`, `bot/handlers.py`, `bot/wednesday_bot.py`, `bot/support_bot.py`.
+  - Исправлены ошибки `ruff` линтинга (`RUF029`, `F821`): добавлены недостающие `await` в тестах, перемещены определения классов внутри функций где необходимо.
+  - Исправлены несовместимые типы и присвоения: корректные type hints для `gigachat_ok` и `current_gigachat` в `bot/handlers.py`, правильная обработка `Optional` типов.
+- **Безопасность**:
+  - Удалён хардкод реальных паролей БД из `.github/workflows/pytest-check.yml` и `tests/conftest.py`; используются безопасные тестовые значения только для изолированной CI‑среды.
+- **Тесты**:
+  - Исправлена проблема с `PermissionError` при запуске `pytest` из‑за попытки загрузки `.env` во время коллекции тестов: добавлены переменные планировщика в `base_env` фикстуру для предотвращения преждевременной загрузки `.env`.
 
 ### Поведение и заметки по миграции
 - Redis используется только для временного состояния, кэшей и счётчиков: при его недоступности вся критичная бизнес‑логика продолжает работать, опираясь на in‑memory fallback.

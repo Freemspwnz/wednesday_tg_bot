@@ -216,7 +216,27 @@ python -c "from utils.config import config; print('✓ Конфигурация 
 
 ## Запуск
 
-### Обычный запуск
+### Вариант A. Запуск через docker-compose (Postgres + Redis + бот)
+
+1. Убедитесь, что `.env` создан и заполнен.
+2. Запустите стек сервисов:
+
+```bash
+docker compose up -d --build
+```
+
+Будут подняты три сервиса:
+- `postgres` — PostgreSQL для всех персистентных данных бота (чаты, usage, метрики, админы, модели, реестр рассылок);
+- `redis` — Redis для кэша, rate limiter’а, circuit breaker’а и временного состояния;
+- `bot` — непосредственно Wednesday Frog Bot.
+
+3. Просмотрите логи бота:
+
+```bash
+docker compose logs -f bot
+```
+
+### Вариант B. Нативный запуск
 
 **Linux/macOS:**
 ```bash
@@ -305,19 +325,10 @@ ps aux | grep python
 tasklist | findstr python
 ```
 
-### Проверка метрик
+### Проверка метрик и статистики использования
 
-Метрики хранятся в `data/metrics.json`:
-```bash
-cat data/metrics.json
-```
-
-### Проверка использования
-
-Статистика хранится в `data/usage_stats.json`:
-```bash
-cat data/usage_stats.json
-```
+Все метрики (`utils.metrics.Metrics`) и статистика использования (`utils.usage_tracker.UsageTracker`) теперь хранятся в PostgreSQL.
+Для быстрой проверки можно выполнить запросы к таблицам `metrics`, `usage_stats`, `usage_settings` в вашей базе бота.
 
 ## Автоматический запуск
 
@@ -465,19 +476,14 @@ grep GIGACHAT_CERT_PATH .env || echo "Не указан GIGACHAT_CERT_PATH"
 
 ### Очистка данных
 
-**Очистить все данные:**
+**Через docker-compose (dev‑режим):**
 ```bash
-rm -rf data/*.json logs/*.log
+docker compose down -v  # удалит тома Postgres и Redis
 ```
 
-**Очистить только логи:**
+**Очистить только логи (нативный запуск):**
 ```bash
 rm logs/*.log
-```
-
-**Очистить только метрики:**
-```bash
-rm data/metrics.json
 ```
 
 ### Перезапуск бота

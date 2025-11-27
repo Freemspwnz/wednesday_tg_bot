@@ -52,8 +52,12 @@ async def test_start_command_handles_retry_failure(fake_update: Any, fake_contex
 async def test_help_command_admin_version(fake_update: Any, fake_context: Any, async_retry_stub: Any) -> None:
     handler = CommandHandlers(image_generator=MagicMock(), next_run_provider=lambda: None)
     async_retry_stub(handler)
-    # Используем Union для совместимости с тестовым SimpleNamespace
-    handler.admins_store = SimpleNamespace(is_admin=lambda _uid: True)  # type: ignore[assignment]
+
+    class _AdminOk:
+        async def is_admin(self, _uid: int) -> bool:
+            return True
+
+    handler.admins_store = _AdminOk()  # type: ignore[assignment]
 
     await handler.help_command(fake_update, fake_context)
 
@@ -70,15 +74,20 @@ async def test_set_frog_limit_command_success(fake_update: Any, fake_context: An
             self.monthly_quota: int = 100
             self.total: int = 10
 
-        def set_frog_threshold(self, value: int) -> int:
+        async def set_frog_threshold(self, value: int) -> int:
             self.frog_threshold = value
             return value
 
-        def get_limits_info(self) -> tuple[int, int, int]:
+        async def get_limits_info(self) -> tuple[int, int, int]:
             return self.total, self.frog_threshold, self.monthly_quota
 
     handler = CommandHandlers(image_generator=MagicMock(), next_run_provider=None)
-    handler.admins_store = SimpleNamespace(is_admin=lambda _uid: True)  # type: ignore[assignment]
+
+    class _AdminOk2:
+        async def is_admin(self, _uid: int) -> bool:
+            return True
+
+    handler.admins_store = _AdminOk2()  # type: ignore[assignment]
 
     fake_context.application.bot_data["usage"] = FakeUsage()
     fake_context.args = ["80"]
@@ -122,19 +131,27 @@ async def test_frog_command_success(
             self.monthly_quota: int = 100
             self.frog_threshold: int = 70
 
-        def can_use_frog(self) -> bool:
+        async def can_use_frog(self) -> bool:
             return True
 
-        def get_limits_info(self) -> tuple[int, int, int]:
+        async def get_limits_info(self) -> tuple[int, int, int]:
             return self.count, self.frog_threshold, self.monthly_quota
 
-        def increment(self, value: int) -> None:
+        async def increment(self, value: int) -> None:
             self.count += value
 
     generator = DummyGenerator()
     handler = CommandHandlers(image_generator=generator, next_run_provider=None)  # type: ignore[arg-type]
     async_retry_stub(handler)
-    handler.admins_store = SimpleNamespace(is_admin=lambda _uid: False, list_all_admins=lambda: [])  # type: ignore[assignment]
+
+    class _AdminNo:
+        async def is_admin(self, _uid: int) -> bool:
+            return False
+
+        async def list_all_admins(self) -> list[int]:
+            return []
+
+    handler.admins_store = _AdminNo()  # type: ignore[assignment]
 
     fake_context.application.bot_data["usage"] = DummyUsage()
 
@@ -159,16 +176,21 @@ async def test_frog_command_usage_limit(fake_update: Any, fake_context: Any, asy
             self.monthly_quota: int = 100
             self.frog_threshold: int = 70
 
-        def can_use_frog(self) -> bool:
+        async def can_use_frog(self) -> bool:
             return False
 
-        def get_limits_info(self) -> tuple[int, int, int]:
+        async def get_limits_info(self) -> tuple[int, int, int]:
             return 70, self.frog_threshold, self.monthly_quota
 
     generator = DummyGenerator()
     handler = CommandHandlers(image_generator=generator, next_run_provider=None)  # type: ignore[arg-type]
     async_retry_stub(handler)
-    handler.admins_store = SimpleNamespace(is_admin=lambda _uid: False)  # type: ignore[assignment]
+
+    class _AdminNo2:
+        async def is_admin(self, _uid: int) -> bool:
+            return False
+
+    handler.admins_store = _AdminNo2()  # type: ignore[assignment]
 
     fake_context.application.bot_data["usage"] = LimitedUsage()
 
@@ -178,3 +200,93 @@ async def test_frog_command_usage_limit(fake_update: Any, fake_context: Any, asy
     message = call.kwargs.get("text", call.args[0])
     assert "Лимит ручных генераций" in message
     assert fake_update.message.reply_photo.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_status_command_integration_with_postgres_stores(
+    fake_update: Any,
+    fake_context: Any,
+    async_retry_stub: Any,
+) -> None:
+    from utils.chats_store import ChatsStore
+    from utils.metrics import Metrics
+    from utils.usage_tracker import UsageTracker
+
+    # Настраиваем image_generator с простыми async-заглушками
+    image_generator = MagicMock()
+    image_generator.check_api_status = AsyncMock(
+        return_value=(True, "OK", [], (None, None)),
+    )
+    image_generator.gigachat_client = None
+
+    handler = CommandHandlers(image_generator=image_generator, next_run_provider=lambda: None)
+    async_retry_stub(handler)
+
+    class _AdminOk:
+        async def is_admin(self, _uid: int) -> bool:
+            return True
+
+    handler.admins_store = _AdminOk()  # type: ignore[assignment]
+
+    # Реальные async-хранилища на Postgres
+    usage = UsageTracker(storage_path="ignored.json")
+    chats = ChatsStore(storage_path="ignored.json")
+    metrics = Metrics(storage_path="ignored.json")
+
+    fake_context.application.bot_data["usage"] = usage
+    fake_context.application.bot_data["chats"] = chats
+    fake_context.application.bot_data["metrics"] = metrics
+
+    # get_me требуется в статусе
+    fake_context.bot.get_me = AsyncMock(return_value=SimpleNamespace(first_name="TestBot"))
+
+    await handler.status_command(fake_update, fake_context)
+
+    fake_update.message.reply_text.assert_awaited()
+    call = fake_update.message.reply_text.await_args
+    text = call.kwargs.get("text", call.args[0])
+    assert "Статус бота" in text
+    assert "Генерации:" in text
+
+
+@pytest.mark.asyncio
+async def test_force_send_command_integration_with_postgres_stores(
+    fake_update: Any,
+    fake_context: Any,
+    async_retry_stub: Any,
+) -> None:
+    from utils.chats_store import ChatsStore
+    from utils.usage_tracker import UsageTracker
+
+    class _DummyGenerator:
+        def __init__(self) -> None:
+            self.generate_frog_image = AsyncMock(return_value=(b"img", "caption"))
+            self.save_image_locally = MagicMock(return_value="saved")
+            self.get_random_saved_image = MagicMock(return_value=None)
+
+    image_generator = _DummyGenerator()
+
+    handler = CommandHandlers(image_generator=image_generator, next_run_provider=None)  # type: ignore[arg-type]
+    async_retry_stub(handler)
+
+    class _AdminOk:
+        async def is_admin(self, _uid: int) -> bool:
+            return True
+
+    handler.admins_store = _AdminOk()  # type: ignore[assignment]
+
+    # Реальные async-хранилища
+    chats = ChatsStore(storage_path="ignored.json")
+    await chats.add_chat(fake_update.effective_chat.id, "Test chat")
+    usage = UsageTracker(storage_path="ignored.json")
+
+    fake_context.application.bot_data["chats"] = chats
+    fake_context.application.bot_data["usage"] = usage
+
+    # Вызываем /force_send all
+    fake_context.args = ["all"]
+
+    await handler.admin_force_send_command(fake_update, fake_context)
+
+    # Должна быть хотя бы одна отправка фото
+    assert fake_context.bot.send_photo.await_count >= 1

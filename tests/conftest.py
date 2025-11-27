@@ -17,6 +17,9 @@ _session_env_defaults = {
     "KANDINSKY_SECRET_KEY": "session-test-secret",
     "CHAT_ID": "999999",
     "ADMIN_CHAT_ID": "999998",
+    "SCHEDULER_SEND_TIMES": "09:00,12:00,18:00",
+    "SCHEDULER_WEDNESDAY_DAY": "2",
+    "SCHEDULER_TZ": "Europe/Moscow",
 }
 
 for key, value in _session_env_defaults.items():
@@ -40,30 +43,30 @@ class _InMemoryModelsStore:
         self._kandinsky_model: tuple[str | None, str | None] = (None, None)
         self._kandinsky_available: list[str] = []
 
-    # GigaChat
-    def set_gigachat_model(self, model_name: str) -> None:
+    # GigaChat (async совместимый интерфейс)
+    async def set_gigachat_model(self, model_name: str) -> None:
         self._gigachat_model = model_name
 
-    def get_gigachat_model(self) -> str | None:
+    async def get_gigachat_model(self) -> str | None:
         return self._gigachat_model
 
-    def set_gigachat_available_models(self, models: list[str]) -> None:
+    async def set_gigachat_available_models(self, models: list[str]) -> None:
         self._gigachat_available = list(models)
 
-    def get_gigachat_available_models(self) -> list[str]:
+    async def get_gigachat_available_models(self) -> list[str]:
         return list(self._gigachat_available)
 
-    # Kandinsky
-    def set_kandinsky_model(self, pipeline_id: str, pipeline_name: str) -> None:
+    # Kandinsky (async совместимый интерфейс)
+    async def set_kandinsky_model(self, pipeline_id: str, pipeline_name: str) -> None:
         self._kandinsky_model = (pipeline_id, pipeline_name)
 
-    def get_kandinsky_model(self) -> tuple[str | None, str | None]:
+    async def get_kandinsky_model(self) -> tuple[str | None, str | None]:
         return self._kandinsky_model
 
-    def set_kandinsky_available_models(self, models: list[Any] | list[str]) -> None:
+    async def set_kandinsky_available_models(self, models: list[Any] | list[str]) -> None:
         self._kandinsky_available = list(models) if models else []
 
-    def get_kandinsky_available_models(self) -> list[str]:
+    async def get_kandinsky_available_models(self) -> list[str]:
         return list(self._kandinsky_available)
 
 
@@ -78,12 +81,16 @@ def base_env(monkeypatch: Any, tmp_path_factory: Any) -> Generator[None, None, N
         "ADMIN_CHAT_ID": "54321",
         "GIGACHAT_AUTHORIZATION_KEY": "ZmFrZS1rZXk=",
         "GIGACHAT_SCOPE": "GIGACHAT_API_PERS",
-        # Параметры подключения к тестовой Postgres-БД
-        "POSTGRES_USER": os.getenv("POSTGRES_USER", "wednesday"),
-        "POSTGRES_PASSWORD": os.getenv("POSTGRES_PASSWORD", "wednesday3380!"),
+        # Параметры подключения к тестовой Postgres-БД (безопасные тестовые значения)
+        "POSTGRES_USER": os.getenv("POSTGRES_USER", "test_user"),
+        "POSTGRES_PASSWORD": os.getenv("POSTGRES_PASSWORD", "test_password_ci_2024"),
         "POSTGRES_DB": os.getenv("POSTGRES_DB", "wednesdaydb_test"),
         "POSTGRES_HOST": os.getenv("POSTGRES_HOST", "localhost"),
         "POSTGRES_PORT": os.getenv("POSTGRES_PORT", "5432"),
+        # Переменные планировщика для избежания вызовов load_dotenv() при инициализации SchedulerConfig
+        "SCHEDULER_SEND_TIMES": "09:00,12:00,18:00",
+        "SCHEDULER_WEDNESDAY_DAY": "2",
+        "SCHEDULER_TZ": "Europe/Moscow",
     }
     for key, value in env_defaults.items():
         monkeypatch.setenv(key, value)
@@ -141,13 +148,13 @@ def patch_models_store(monkeypatch: Any) -> Generator[None, None, None]:
     # Создаём совместимый с AdminsStore объект для тестов
 
     class _TestAdminsStore:
-        def is_admin(self, user_id: int) -> bool:
+        async def is_admin(self, user_id: int) -> bool:  # pragma: no cover - простая заглушка
             return False
 
-        def list_admins(self) -> list[int]:
+        async def list_admins(self) -> list[int]:  # pragma: no cover - простая заглушка
             return []
 
-        def list_all_admins(self) -> list[int]:
+        async def list_all_admins(self) -> list[int]:  # pragma: no cover - простая заглушка
             return []
 
     monkeypatch.setattr(admins_store_module, "AdminsStore", lambda *args, **kwargs: _TestAdminsStore())

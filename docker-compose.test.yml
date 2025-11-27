@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  postgres_test:
+    image: postgres:16-alpine
+    container_name: wednesday_postgres_test
+    environment:
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_password_ci_2024
+      POSTGRES_DB: wednesdaydb_test
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test_user -d wednesdaydb_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    tmpfs:
+      - /var/lib/postgresql/data  # Используем tmpfs для быстрой очистки после тестов
+
+  redis_test:
+    image: redis:7-alpine
+    container_name: wednesday_redis_test
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    tmpfs:
+      - /data  # Используем tmpfs для быстрой очистки после тестов
+

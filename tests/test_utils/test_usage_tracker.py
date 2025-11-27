@@ -17,8 +17,7 @@ TEST_THRESHOLD_10 = 10
 TEST_TOTAL_7 = 7
 
 
-@pytest.mark.asyncio
-async def test_usage_tracker_initial_save() -> None:
+def test_usage_tracker_initial_save() -> None:
     tracker = UsageTracker(
         storage_path="ignored.json",
         monthly_quota=TEST_QUOTA_50,

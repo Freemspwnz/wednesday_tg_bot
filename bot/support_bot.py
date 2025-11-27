@@ -200,7 +200,7 @@ class SupportBot:
 
         # Сообщим админам о запуске SupportBot
         try:
-            admins = AdminsStore().list_all_admins()
+            admins = await AdminsStore().list_all_admins()
             for admin_id in admins:
                 try:
                     await self.application.bot.send_message(
@@ -272,7 +272,7 @@ class SupportBot:
             pass
         # Уведомим админов об остановке
         try:
-            admins = AdminsStore().list_all_admins()
+            admins = await AdminsStore().list_all_admins()
             if admins:
                 for admin_id in admins:
                     try:

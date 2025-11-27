@@ -59,18 +59,25 @@ MAX_RETRIES=3
 # Полный URL подключения к Redis (если задан, перекрывает host/port/db/password)
 # Примеры:
 # REDIS_URL=redis://localhost:6379/0
-# REDIS_URL=rediss://user:pass@host:6380/1
+# REDIS_URL=redis://:password@localhost:6379/0 (с паролем)
+# REDIS_URL=rediss://user:pass@host:6380/1 (с TLS)
 REDIS_URL=
 
 # Альтернативная форма задания подключения, если REDIS_URL не используется:
-# Хост и порт Redis
+# Хост Redis
+# Для локальной разработки: localhost
+# Для docker-compose: redis (имя сервиса в docker-compose.yml)
 REDIS_HOST=localhost
+
+# Порт Redis (по умолчанию 6379)
 REDIS_PORT=6379
 
-# Номер базы (по умолчанию 0)
+# Номер базы данных Redis (по умолчанию 0)
 REDIS_DB=0
 
-# Пароль (если настроен на сервере Redis)
+# Пароль для аутентификации в Redis (опционально)
+# Если указан, Redis будет требовать пароль при подключении
+# ОБЯЗАТЕЛЬНО установите пароль в продакшн окружении!
 REDIS_PASSWORD=
 
 # ===== GIGACHAT НАСТРОЙКИ (для генерации промптов) =====
@@ -113,26 +120,6 @@ GIGACHAT_AUTHORIZATION_KEY=
 # Получите ваш ID от @userinfobot
 ADMIN_CHAT_ID=
 
-# ===== ПУТИ К ФАЙЛАМ ДАННЫХ (опционально) =====
-
-# Путь к файлу со списком чатов
-CHATS_STORAGE=data/chats.json
-
-# Путь к файлу со статистикой использования
-USAGE_STORAGE=data/usage_stats.json
-
-# Путь к реестру отправок (anti-duplicate)
-DISPATCH_REGISTRY_STORAGE=data/dispatch_registry.json
-
-# Путь к метрикам производительности
-METRICS_STORAGE=data/metrics.json
-
-# Путь к настройкам моделей (Kandinsky и GigaChat)
-MODELS_STORAGE=data/models.json
-
-# Путь к списку администраторов
-ADMINS_STORAGE=data/admins.json
-
 # ===== ПРОКСИ (опционально) =====
 
 # Если нужен прокси для доступа к Telegram Bot API
@@ -166,11 +153,24 @@ SCHEDULER_TEST_MINUTES=0
 
 # ===== POSTGRES НАСТРОЙКИ =====
 
+# Имя пользователя для подключения к PostgreSQL
+# По умолчанию используется при создании БД в docker-compose
 POSTGRES_USER=your_postgres_user
+
+# Пароль пользователя PostgreSQL
+# ОБЯЗАТЕЛЬНО замените на безопасный пароль в продакшн окружении!
 POSTGRES_PASSWORD=your_postgres_password
-POSTGRES_DB=your_postgres_db
-POSTGRES_HOST=your_postgres_host
-POSTGRES_PORT=your_postgres_port
+
+# Имя базы данных
+POSTGRES_DB=wednesdaydb
+
+# Хост PostgreSQL
+# Для локальной разработки: localhost
+# Для docker-compose: postgres (имя сервиса в docker-compose.yml)
+POSTGRES_HOST=localhost
+
+# Порт PostgreSQL (по умолчанию 5432)
+POSTGRES_PORT=5432
 
 # ==========================================
 # ПРИМЕЧАНИЯ

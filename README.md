@@ -88,19 +88,17 @@ wednesday_tg_bot/
 ├── utils/
 │   ├── config.py                # Конфигурация и валидация
 │   ├── logger.py                # Настройка логирования (loguru)
-│   ├── chats_store.py           # Хранилище активных чатов
-│   ├── usage_tracker.py         # Отслеживание использования API
-│   ├── dispatch_registry.py     # Реестр отправок (anti-duplicate)
-│   ├── models_store.py          # Текущее/доступные модели для Kandinsky/GigaChat
-│   ├── admins_store.py          # Дополнительные администраторы
-│   └── metrics.py               # Метрики производительности
+│   ├── redis_client.py          # Асинхронный Redis‑клиент с in‑memory fallback
+│   ├── postgres_client.py       # Пул подключений к PostgreSQL (asyncpg)
+│   ├── postgres_schema.py       # Инициализация/миграция схемы БД
+│   ├── chats_store.py           # Хранилище активных чатов (PostgreSQL)
+│   ├── usage_tracker.py         # Отслеживание использования API (PostgreSQL)
+│   ├── dispatch_registry.py     # Реестр отправок (anti-duplicate, PostgreSQL)
+│   ├── models_store.py          # Текущее/доступные модели для Kandinsky/GigaChat (PostgreSQL)
+│   ├── admins_store.py          # Дополнительные администраторы (PostgreSQL)
+│   └── metrics.py               # Метрики производительности (PostgreSQL)
 ├── data/
-│   ├── chats.json               # Список активных чатов
-│   ├── usage_stats.json         # Статистика использования
-│   ├── dispatch_registry.json   # Реестр отправок
-│   ├── metrics.json             # Метрики производительности
-│   ├── models.json              # Текущие и доступные модели
-│   └── frogs/                   # Генерированные изображения
+│   └── frogs/                   # Генерированные изображения (архив)
 ├── logs/                        # Логи с ротацией
 ├── requirements.txt             # Зависимости
 ├── .env                         # Конфигурация (создается пользователем)
@@ -142,13 +140,18 @@ MAX_RETRIES=3
 # ID администратора для админ-команд
 ADMIN_CHAT_ID=your_admin_chat_id
 
-# Пути к файлам данных
-CHATS_STORAGE=data/chats.json
-USAGE_STORAGE=data/usage_stats.json
-DISPATCH_REGISTRY_STORAGE=data/dispatch_registry.json
-METRICS_STORAGE=data/metrics.json
-MODELS_STORAGE=data/models.json
-ADMINS_STORAGE=data/admins.json
+# Подключение к PostgreSQL (совместимо с docker-compose.yml)
+POSTGRES_USER=your_postgres_user
+POSTGRES_PASSWORD=your_postgres_password
+POSTGRES_DB=wednesdaydb
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+
+# Подключение к Redis (опционально, для кэша/лимитеров)
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+REDIS_PASSWORD=your_redis_password  # опционально, оставьте пустым если без пароля
 
 # Прокси для API запросов
 HTTPS_PROXY=http://proxy:port
@@ -170,7 +173,7 @@ SCHEDULER_TEST_MINUTES=0
 - Общая квота: 100 генераций в месяц (по умолчанию)
 - Порог `/frog`: 70 генераций (после этого команда отключается)
 - Автоматические отправки не ограничиваются порогом
-- Настройки квоты и порога сохраняются в `usage_stats.json` (секция `settings`) и остаются после перезапуска
+- Настройки квоты и порога сохраняются в PostgreSQL и остаются после перезапуска
 
 ### Circuit Breaker
 
@@ -217,9 +220,19 @@ SCHEDULER_TEST_MINUTES=0
 - Доступ к интернету
 - 100MB свободного места на диске
 
-## Установка
+## Установка и запуск
 
-Подробную инструкцию по установке см. в [INSTALLATION.md](INSTALLATION.md)
+Подробную инструкцию см. в `docs/INSTALLATION.md`. Кратко:
+
+```bash
+git clone https://github.com/your-username/wednesday-tg-bot.git
+cd wednesday-tg-bot
+cp env_example.txt .env
+# отредактировать .env
+
+# Запуск через docker-compose (Postgres + Redis + бот)
+docker compose up -d --build
+```
 
 ## Безопасность
 

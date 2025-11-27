@@ -690,7 +690,7 @@ class WednesdayBot:
                     else:
                         # Если ADMIN_CHAT_ID не задан, разошлем всем админам из хранилища (без дубля с CHAT_ID)
                         try:
-                            admins = _AdminsStore().list_all_admins()
+                            admins = await _AdminsStore().list_all_admins()
                             for admin_id in admins:
                                 try:
                                     chat_id_val = int(str(self.chat_id)) if self.chat_id is not None else None
@@ -978,7 +978,7 @@ class WednesdayBot:
                     except Exception:
                         pass
                 else:
-                    admins = AdminsStore().list_all_admins()
+                    admins = await AdminsStore().list_all_admins()
                     for admin_id in admins:
                         try:
                             chat_id_val = int(str(self.chat_id)) if self.chat_id is not None else None

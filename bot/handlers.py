@@ -277,7 +277,7 @@ class CommandHandlers:
         self.logger.info(f"Получена команда /stop от пользователя {user_id}")
 
         # Проверка прав администратора
-        if not self.admins_store.is_admin(user_id):
+        if not await self.admins_store.is_admin(user_id):
             try:
                 await self._retry_on_connect_error(
                     update.message.reply_text,
@@ -713,7 +713,7 @@ class CommandHandlers:
                     self.logger.warning("Нет сохраненных изображений для отправки как fallback")
 
                 # Отправляем детальное сообщение всем администраторам
-                all_admins = self.admins_store.list_all_admins()
+                all_admins = await self.admins_store.list_all_admins()
                 if all_admins:
                     admin_message = (
                         "🔴 Ошибка генерации изображения по команде /frog\n\n"
@@ -789,7 +789,7 @@ class CommandHandlers:
                 self.logger.error(f"Не удалось отправить fallback сообщение/изображение: {send_error}")
 
             # Отправляем детальное сообщение всем администраторам
-            all_admins = self.admins_store.list_all_admins()
+            all_admins = await self.admins_store.list_all_admins()
             if all_admins:
                 try:
                     import traceback
@@ -931,7 +931,7 @@ class CommandHandlers:
                     from utils.models_store import ModelsStore
 
                     models_store = ModelsStore()
-                    current_gigachat = models_store.get_gigachat_model() or "GigaChat"
+                    current_gigachat = await models_store.get_gigachat_model() or "GigaChat"
                 except Exception as e:
                     gigachat_status = f"❌ Ошибка: {str(e)[: MAX_ERROR_DETAILS_LENGTH // 10]}"
                     self.logger.error(f"Ошибка при проверке GigaChat API: {e}", exc_info=True)
@@ -1782,7 +1782,7 @@ class CommandHandlers:
                 self.logger.error(f"Не удалось отправить сообщение об ограничении доступа после {3} попыток: {e}")
             return
 
-        all_admins = self.admins_store.list_all_admins()
+        all_admins = await self.admins_store.list_all_admins()
         if not all_admins:
             self.logger.info("Нет администраторов")
             try:
@@ -1861,7 +1861,7 @@ class CommandHandlers:
                 from utils.models_store import ModelsStore
 
                 models_store = ModelsStore()
-                current_kandinsky_id, current_kandinsky_name = models_store.get_kandinsky_model()
+                current_kandinsky_id, current_kandinsky_name = await models_store.get_kandinsky_model()
                 if current_kandinsky_id:
                     message_parts.append(f"  Текущая: {current_kandinsky_name or current_kandinsky_id}")
 
@@ -1874,7 +1874,7 @@ class CommandHandlers:
                     from utils.models_store import ModelsStore
 
                     models_store = ModelsStore()
-                    current_gigachat = models_store.get_gigachat_model()
+                    current_gigachat = await models_store.get_gigachat_model()
 
                     message_parts.append("🤖 GigaChat (GigaChat API):")
                     for model in gigachat_models:
@@ -1888,7 +1888,7 @@ class CommandHandlers:
                 from utils.models_store import ModelsStore
 
                 models_store = ModelsStore()
-                current_gigachat = models_store.get_gigachat_model()
+                current_gigachat = await models_store.get_gigachat_model()
                 if current_gigachat:
                     message_parts.append(f"  Текущая: {current_gigachat}")
 
