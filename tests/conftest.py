@@ -3,10 +3,11 @@ import os
 import sys
 from collections.abc import Callable, Generator
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, AsyncIterator
 from unittest.mock import AsyncMock
 
 import pytest
+import pytest_asyncio
 from pytest import MonkeyPatch
 
 _session_monkeypatch = MonkeyPatch()
@@ -69,7 +70,6 @@ class _InMemoryModelsStore:
 @pytest.fixture(autouse=True)
 def base_env(monkeypatch: Any, tmp_path_factory: Any) -> Generator[None, None, None]:
     """Гарантирует наличие обязательных переменных окружения и изолированных хранилищ."""
-    storage_dir = tmp_path_factory.mktemp("storage")
     env_defaults = {
         "TELEGRAM_BOT_TOKEN": "test-token",
         "KANDINSKY_API_KEY": "test-api",
@@ -78,12 +78,57 @@ def base_env(monkeypatch: Any, tmp_path_factory: Any) -> Generator[None, None, N
         "ADMIN_CHAT_ID": "54321",
         "GIGACHAT_AUTHORIZATION_KEY": "ZmFrZS1rZXk=",
         "GIGACHAT_SCOPE": "GIGACHAT_API_PERS",
-        "MODELS_STORAGE": str(storage_dir / "models.json"),
-        "ADMINS_STORAGE": str(storage_dir / "admins.json"),
+        # Параметры подключения к тестовой Postgres-БД
+        "POSTGRES_USER": os.getenv("POSTGRES_USER", "wednesday"),
+        "POSTGRES_PASSWORD": os.getenv("POSTGRES_PASSWORD", "wednesday3380!"),
+        "POSTGRES_DB": os.getenv("POSTGRES_DB", "wednesdaydb_test"),
+        "POSTGRES_HOST": os.getenv("POSTGRES_HOST", "localhost"),
+        "POSTGRES_PORT": os.getenv("POSTGRES_PORT", "5432"),
     }
     for key, value in env_defaults.items():
         monkeypatch.setenv(key, value)
     yield
+
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def _setup_test_postgres() -> AsyncIterator[None]:
+    """
+    Инициализирует тестовый пул Postgres и схему БД для async‑репозиториев.
+
+    Фикстура запускается один раз за сессию тестов и:
+    - создаёт пул подключений через init_postgres_pool;
+    - гарантирует наличие схемы через ensure_schema;
+    - очищает данные в основных таблицах перед запуском тестов.
+
+    Ожидается, что тестовая БД (`POSTGRES_DB`) уже создана во внешнем окружении.
+    """
+    from utils.postgres_client import close_postgres_pool, get_postgres_pool, init_postgres_pool
+    from utils.postgres_schema import ensure_schema
+
+    await init_postgres_pool(min_size=1, max_size=2)
+    await ensure_schema()
+
+    pool = get_postgres_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            TRUNCATE TABLE
+                dispatch_registry,
+                chats,
+                admins,
+                usage_stats,
+                usage_settings,
+                metrics,
+                models_kandinsky,
+                models_gigachat
+            RESTART IDENTITY;
+            """,
+        )
+
+    try:
+        yield
+    finally:
+        await close_postgres_pool()
 
 
 @pytest.fixture(autouse=True)

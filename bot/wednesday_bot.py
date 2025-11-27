@@ -242,7 +242,7 @@ class WednesdayBot:
 
         try:
             # Сначала соберём список целевых чатов
-            targets: set[int] = set(self.chats.list_chat_ids() or [])
+            targets: set[int] = set(await self.chats.list_chat_ids() or [])
             if self.chat_id:
                 try:
                     chat_id_int: int = int(str(self.chat_id))
@@ -259,7 +259,7 @@ class WednesdayBot:
             # Проверяем, отправляли ли уже в этот слот во ВСЕ целевые чаты
             already_dispatched_for_all = True
             for target_chat in targets:
-                if not self.dispatch_registry.is_dispatched(slot_date, slot_time, target_chat):
+                if not await self.dispatch_registry.is_dispatched(slot_date, slot_time, target_chat):
                     already_dispatched_for_all = False
                     break
 
@@ -305,12 +305,13 @@ class WednesdayBot:
                                 caption=caption,
                             )
                             # Отмечаем в реестре успешную отправку
-                            self.dispatch_registry.mark_dispatched(slot_date, slot_time, target_chat)
+                            await self.dispatch_registry.mark_dispatched(slot_date, slot_time, target_chat)
                             # инкрементируем счетчик после успешной отправки
-                            self.usage.increment(1)
+                            await self.usage.increment(1)
                             try:
-                                self.metrics.increment_dispatch_success()
+                                await self.metrics.increment_dispatch_success()
                             except Exception:
+                                # Метрики не критичны для основного потока
                                 pass
                             self.logger.info(f"Жаба отправлена в чат {target_chat}")
                             break
@@ -349,7 +350,7 @@ class WednesdayBot:
                                 except Exception:
                                     pass
                                 try:
-                                    self.metrics.increment_dispatch_failed()
+                                    await self.metrics.increment_dispatch_failed()
                                 except Exception:
                                     pass
                             else:
@@ -375,7 +376,7 @@ class WednesdayBot:
                 await self._send_admin_error(error_details)
 
                 # Отправляем дружелюбные сообщения и случайные изображения во все целевые чаты
-                targets = set(self.chats.list_chat_ids() or [])
+                targets = set(await self.chats.list_chat_ids() or [])
                 if self.chat_id:
                     try:
                         chat_id_val: int = int(str(self.chat_id))
@@ -386,7 +387,7 @@ class WednesdayBot:
                 for target_chat in targets:
                     try:
                         # Проверяем, не было ли уже отправлено в этот чат в этот тайм-слот
-                        if self.dispatch_registry.is_dispatched(slot_date, slot_time, target_chat):
+                        if await self.dispatch_registry.is_dispatched(slot_date, slot_time, target_chat):
                             self.logger.info(
                                 f"Пропускаем fallback отправку в {target_chat} - "
                                 f"уже отправлено в слот {slot_date}_{slot_time}",
@@ -399,9 +400,9 @@ class WednesdayBot:
                         # Отправляем случайное изображение
                         if await self._send_fallback_image(target_chat):
                             # Отмечаем в реестре успешную отправку
-                            self.dispatch_registry.mark_dispatched(slot_date, slot_time, target_chat)
+                            await self.dispatch_registry.mark_dispatched(slot_date, slot_time, target_chat)
                             try:
-                                self.metrics.increment_dispatch_success()
+                                await self.metrics.increment_dispatch_success()
                             except Exception:
                                 pass
 
@@ -425,7 +426,7 @@ class WednesdayBot:
             )
 
             # Отправляем дружелюбные сообщения и случайные изображения во все целевые чаты
-            targets = set(self.chats.list_chat_ids() or [])
+            targets = set(await self.chats.list_chat_ids() or [])
             if self.chat_id:
                 try:
                     chat_id_error_val: int = int(str(self.chat_id))
@@ -436,7 +437,7 @@ class WednesdayBot:
             for target_chat in targets:
                 try:
                     # Проверяем, не было ли уже отправлено в этот чат в этот тайм-слот
-                    if self.dispatch_registry.is_dispatched(slot_date, slot_time, target_chat):
+                    if await self.dispatch_registry.is_dispatched(slot_date, slot_time, target_chat):
                         self.logger.info(
                             f"Пропускаем fallback отправку в {target_chat} - "
                             f"уже отправлено в слот {slot_date}_{slot_time}",
@@ -449,7 +450,7 @@ class WednesdayBot:
                     # Отправляем случайное изображение
                     if await self._send_fallback_image(target_chat):
                         try:
-                            self.metrics.increment_dispatch_success()
+                            await self.metrics.increment_dispatch_success()
                         except Exception:
                             pass
 
@@ -502,7 +503,7 @@ class WednesdayBot:
         from utils.admins_store import AdminsStore
 
         admins_store = AdminsStore()
-        all_admins = admins_store.list_all_admins()
+        all_admins = await admins_store.list_all_admins()
 
         if not all_admins:
             self.logger.warning("Нет администраторов для отправки ошибки")
@@ -783,7 +784,7 @@ class WednesdayBot:
 
             # Бот добавлен/активирован в чате
             if new in {"member", "administrator"} and old in {"left", "kicked", "restricted", None}:
-                self.chats.add_chat(chat_id, title)
+                await self.chats.add_chat(chat_id, title)
                 welcome = (
                     "🐸 Привет! Я Wednesday Frog Bot.\n\n"
                     "Я присылаю картинки с жабой по средам (09:00, 12:00, 18:00 по Мск), "
@@ -800,7 +801,7 @@ class WednesdayBot:
 
             # Бот удалён из чата
             if new in {"left", "kicked"} and old in {"member", "administrator", "restricted"}:
-                self.chats.remove_chat(chat_id)
+                await self.chats.remove_chat(chat_id)
 
         except Exception as e:
             self.logger.error(f"Ошибка в on_my_chat_member: {e}")

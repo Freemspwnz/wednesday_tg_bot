@@ -202,15 +202,21 @@ class ImageGenerator:
                     self.logger.info("Изображение успешно сгенерировано")
                     elapsed = time.time() - start_time
                     if metrics:
-                        metrics.increment_generation_success()
-                        metrics.add_generation_time(elapsed)
-                        if attempt > 0:
-                            metrics.increment_generation_retry()
+                        try:
+                            await metrics.increment_generation_success()
+                            await metrics.add_generation_time(elapsed)
+                            if attempt > 0:
+                                await metrics.increment_generation_retry()
+                        except Exception as exc:
+                            self.logger.warning(f"Не удалось обновить метрики успешной генерации: {exc}")
                     return image_data, caption
                 else:
                     self.logger.warning(f"Попытка {attempt + 1} не удалась")
                     if metrics and attempt == 0:
-                        metrics.increment_generation_retry()
+                        try:
+                            await metrics.increment_generation_retry()
+                        except Exception as exc:
+                            self.logger.warning(f"Не удалось обновить метрики retry генерации: {exc}")
 
             except Exception as e:
                 self.logger.error(f"Ошибка при генерации (попытка {attempt + 1}): {e}")
@@ -230,8 +236,11 @@ class ImageGenerator:
 
         # Если не удалось сгенерировать
         if metrics:
-            metrics.increment_generation_failed()
-            metrics.add_generation_time(elapsed)
+            try:
+                await metrics.increment_generation_failed()
+                await metrics.add_generation_time(elapsed)
+            except Exception as exc:
+                self.logger.warning(f"Не удалось обновить метрики неуспешной генерации: {exc}")
 
         self.logger.error("Все попытки генерации изображения исчерпаны")
         return None

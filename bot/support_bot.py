@@ -311,9 +311,9 @@ class SupportBot:
         except Exception as e:
             self.logger.warning(f"Не удалось отправить сообщение о техработах: {e}")
 
-    def _is_admin(self, user_id: int) -> bool:
+    async def _is_admin(self, user_id: int) -> bool:
         """Проверяет, является ли пользователь администратором."""
-        return self.admins.is_admin(user_id)
+        return await self.admins.is_admin(user_id)
 
     async def log_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Отправляет логи. Использование: /log [count] (1..10). Без аргумента — последний файл."""
@@ -323,7 +323,7 @@ class SupportBot:
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
         self.logger.info(f"SupportBot /log от user_id={user_id}, chat_id={chat_id}")
-        if not self._is_admin(user_id):
+        if not await self._is_admin(user_id):
             await update.message.reply_text("❌ Доступно только администратору")
             return
 
@@ -394,7 +394,7 @@ class SupportBot:
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
         self.logger.info(f"SupportBot /start от user_id={user_id}, chat_id={chat_id}")
-        if not self._is_admin(user_id):
+        if not await self._is_admin(user_id):
             await update.message.reply_text("❌ Доступно только администратору")
             return
 
@@ -453,7 +453,7 @@ class SupportBot:
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
         self.logger.info(f"SupportBot /help от user_id={user_id}, chat_id={chat_id}")
-        if not self._is_admin(user_id):
+        if not await self._is_admin(user_id):
             await update.message.reply_text("❌ Доступно только администратору")
             return
         help_text = (
