@@ -23,7 +23,7 @@ def _load_dotenv_if_needed() -> None:
     # 2) Если какой-то переменной не хватает — однократно пробуем загрузить `.env`
     #    через python-dotenv (если файл существует в текущем каталоге).
     try:
-    load_dotenv()
+        load_dotenv()
     except Exception as e:
         # Игнорируем все ошибки доступа к .env (например, в тестах, при отсутствии файла,
         # или при проблемах с правами доступа). Это нормально, если переменные уже есть в окружении.
@@ -57,6 +57,9 @@ class Config:  # noqa: PLR0904
             "KANDINSKY_SECRET_KEY",
             "CHAT_ID",
             "ADMIN_CHAT_ID",
+            "POSTGRES_USER",
+            "POSTGRES_PASSWORD",
+            "POSTGRES_DB",
         ]
 
         missing_vars = []
@@ -242,9 +245,18 @@ class Config:  # noqa: PLR0904
         Имя пользователя для подключения к Postgres.
 
         Returns:
-            Имя пользователя из POSTGRES_USER или "wednesday" по умолчанию.
+            Имя пользователя из POSTGRES_USER.
+
+        Raises:
+            ValueError: если переменная не задана (проверяется при инициализации Config).
         """
-        return Config._get_env_var("POSTGRES_USER") or "wednesday"
+        value = Config._get_env_var("POSTGRES_USER")
+        if not value:
+            raise ValueError(
+                "POSTGRES_USER не задан. Это обязательная переменная окружения. "
+                "Проверьте переменные окружения контейнера и/или локальный файл .env",
+            )
+        return value
 
     @property
     def postgres_password(self) -> str:
@@ -252,9 +264,18 @@ class Config:  # noqa: PLR0904
         Пароль пользователя для подключения к Postgres.
 
         Returns:
-            Пароль из POSTGRES_PASSWORD или пустую строку, если не указан.
+            Пароль из POSTGRES_PASSWORD.
+
+        Raises:
+            ValueError: если переменная не задана (проверяется при инициализации Config).
         """
-        return Config._get_env_var("POSTGRES_PASSWORD") or ""
+        value = Config._get_env_var("POSTGRES_PASSWORD")
+        if not value:
+            raise ValueError(
+                "POSTGRES_PASSWORD не задан. Это обязательная переменная окружения. "
+                "Проверьте переменные окружения контейнера и/или локальный файл .env",
+            )
+        return value
 
     @property
     def postgres_db(self) -> str:
@@ -262,9 +283,18 @@ class Config:  # noqa: PLR0904
         Имя базы данных Postgres.
 
         Returns:
-            Имя базы из POSTGRES_DB или "wednesdaydb" по умолчанию.
+            Имя базы из POSTGRES_DB.
+
+        Raises:
+            ValueError: если переменная не задана (проверяется при инициализации Config).
         """
-        return Config._get_env_var("POSTGRES_DB") or "wednesdaydb"
+        value = Config._get_env_var("POSTGRES_DB")
+        if not value:
+            raise ValueError(
+                "POSTGRES_DB не задан. Это обязательная переменная окружения. "
+                "Проверьте переменные окружения контейнера и/или локальный файл .env",
+            )
+        return value
 
     @property
     def postgres_host(self) -> str:

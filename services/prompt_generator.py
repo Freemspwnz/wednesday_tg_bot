@@ -380,8 +380,8 @@ class GigaChatClient:
             self.logger.info(f"Модель GigaChat изменена на: {model_name}")
             return True
 
-            self.logger.warning(f"Попытка установить несуществующую модель: {model_name}")
-            return False
+        self.logger.warning(f"Попытка установить несуществующую модель: {model_name}")
+        return False
 
     def generate_prompt_for_kandinsky(self) -> str | None:
         """

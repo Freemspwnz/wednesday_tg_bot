@@ -28,7 +28,7 @@ repos:
   # Базовые проверки файлов (YAML, JSON, размер, конфликты)
   # ---------------------------
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: v6.0.0
     hooks:
       # Проверка размера файлов (максимум 1 МБ)
       - id: check-added-large-files
@@ -83,7 +83,8 @@ repos:
   # Ruff: линтер и форматтер (использует конфиг из pyproject.toml)
   # ---------------------------
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.6
+    rev: v0.7.1
+
     hooks:
       # Ruff lint: проверяет весь проект
       # Автоматически использует [tool.ruff] из pyproject.toml
@@ -117,7 +118,7 @@ repos:
   # Gitleaks: поиск секретов в коде (дополнительно к базовым хукам)
   # ---------------------------
   - repo: https://github.com/zricethezav/gitleaks
-    rev: v8.29.1
+    rev: v8.30.0
     hooks:
       - id: gitleaks
         name: Gitleaks secret scanner
@@ -130,16 +131,8 @@ repos:
   - repo: local
     hooks:
       - id: pytest-pre-push
-        name: Run pytest with coverage before push
-        entry: >
-          python -m pytest
-          --cov=bot
-          --cov=services
-          --cov=utils
-          --cov-report=xml:coverage.xml
-          --cov-report=term
-          --junitxml=junit.xml
-          -o junit_family=legacy
+        name: Run tests with coverage via make test-cov before push
+        entry: make test-cov
         language: system
         pass_filenames: false
         stages: [pre-push]

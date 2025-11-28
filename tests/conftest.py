@@ -20,11 +20,17 @@ _session_env_defaults = {
     "SCHEDULER_SEND_TIMES": "09:00,12:00,18:00",
     "SCHEDULER_WEDNESDAY_DAY": "2",
     "SCHEDULER_TZ": "Europe/Moscow",
+    # Параметры подключения к тестовой Postgres-БД (принудительно устанавливаем тестовые значения)
+    "POSTGRES_USER": "test_user",
+    "POSTGRES_PASSWORD": "test_password_ci_2024",
+    "POSTGRES_DB": "wednesdaydb_test",
+    "POSTGRES_HOST": "localhost",
+    "POSTGRES_PORT": "5432",
 }
 
 for key, value in _session_env_defaults.items():
-    if not os.getenv(key):
-        _session_monkeypatch.setenv(key, value)
+    # Принудительно устанавливаем тестовые значения, игнорируя существующие переменные окружения
+    _session_monkeypatch.setenv(key, value)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -81,12 +87,12 @@ def base_env(monkeypatch: Any, tmp_path_factory: Any) -> Generator[None, None, N
         "ADMIN_CHAT_ID": "54321",
         "GIGACHAT_AUTHORIZATION_KEY": "ZmFrZS1rZXk=",
         "GIGACHAT_SCOPE": "GIGACHAT_API_PERS",
-        # Параметры подключения к тестовой Postgres-БД (безопасные тестовые значения)
-        "POSTGRES_USER": os.getenv("POSTGRES_USER", "test_user"),
-        "POSTGRES_PASSWORD": os.getenv("POSTGRES_PASSWORD", "test_password_ci_2024"),
-        "POSTGRES_DB": os.getenv("POSTGRES_DB", "wednesdaydb_test"),
-        "POSTGRES_HOST": os.getenv("POSTGRES_HOST", "localhost"),
-        "POSTGRES_PORT": os.getenv("POSTGRES_PORT", "5432"),
+        # Параметры подключения к тестовой Postgres-БД
+        "POSTGRES_USER": "test_user",
+        "POSTGRES_PASSWORD": "test_password_ci_2024",
+        "POSTGRES_DB": "wednesdaydb_test",
+        "POSTGRES_HOST": "localhost",
+        "POSTGRES_PORT": "5432",
         # Переменные планировщика для избежания вызовов load_dotenv() при инициализации SchedulerConfig
         "SCHEDULER_SEND_TIMES": "09:00,12:00,18:00",
         "SCHEDULER_WEDNESDAY_DAY": "2",
@@ -97,20 +103,31 @@ def base_env(monkeypatch: Any, tmp_path_factory: Any) -> Generator[None, None, N
     yield
 
 
-@pytest_asyncio.fixture(scope="session", autouse=True)
+@pytest_asyncio.fixture(scope="function", autouse=True)
 async def _setup_test_postgres() -> AsyncIterator[None]:
     """
     Инициализирует тестовый пул Postgres и схему БД для async‑репозиториев.
 
-    Фикстура запускается один раз за сессию тестов и:
-    - создаёт пул подключений через init_postgres_pool;
+    Фикстура запускается перед каждым тестом и:
+    - создаёт пул подключений через init_postgres_pool (пересоздаёт, если был создан в другом loop);
     - гарантирует наличие схемы через ensure_schema;
-    - очищает данные в основных таблицах перед запуском тестов.
+    - очищает данные в основных таблицах перед запуском теста.
 
     Ожидается, что тестовая БД (`POSTGRES_DB`) уже создана во внешнем окружении.
     """
     from utils.postgres_client import close_postgres_pool, get_postgres_pool, init_postgres_pool
     from utils.postgres_schema import ensure_schema
+
+    # Закрываем пул, если он был создан в другом loop
+    try:
+        from utils import postgres_client
+        if postgres_client._pool is not None:
+            try:
+                await close_postgres_pool()
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     await init_postgres_pool(min_size=1, max_size=2)
     await ensure_schema()
@@ -135,16 +152,78 @@ async def _setup_test_postgres() -> AsyncIterator[None]:
     try:
         yield
     finally:
-        await close_postgres_pool()
+        # Не закрываем пул здесь, чтобы он был доступен для других тестов
+        # Пул будет пересоздан в следующем тесте, если loop изменится
+        pass
+
+
+@pytest_asyncio.fixture(scope="function")
+async def cleanup_tables() -> AsyncIterator[None]:
+    """
+    Очищает таблицы между тестами для обеспечения изоляции.
+
+    Используйте эту фикстуру в тестах, которые работают с PostgreSQL.
+    Фикстура очищает все таблицы перед тестом, чтобы гарантировать изоляцию.
+
+    Пример использования:
+        @pytest.mark.asyncio
+        async def test_something(cleanup_tables):
+            # тест использует БД
+    """
+    from utils import postgres_client
+
+    # Очистка выполняется в начале (setup) - только если пул инициализирован
+    try:
+        # Проверяем, инициализирован ли пул, без вызова get_postgres_pool()
+        # чтобы избежать RuntimeError для тестов, которые не используют БД
+        if postgres_client._pool is not None:
+            pool = postgres_client._pool
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    TRUNCATE TABLE
+                        dispatch_registry,
+                        chats,
+                        admins,
+                        usage_stats,
+                        usage_settings,
+                        metrics,
+                        models_kandinsky,
+                        models_gigachat
+                    RESTART IDENTITY;
+                    """,
+                )
+    except Exception:
+        # Игнорируем все ошибки (пул не инициализирован, проблемы с подключением и т.д.)
+        pass
+
+    yield
 
 
 @pytest.fixture(autouse=True)
-def patch_models_store(monkeypatch: Any) -> Generator[None, None, None]:
-    """Подменяет ModelsStore на простую in-memory реализацию."""
+def patch_models_store(monkeypatch: Any, request: Any) -> Generator[None, None, None]:
+    """
+    Подменяет ModelsStore на простую in-memory реализацию.
+
+    Исключает тесты из test_utils/test_models_store.py и интеграционные тесты,
+    которые должны использовать реальный ModelsStore с Postgres.
+    """
     import utils.admins_store as admins_store_module
     import utils.models_store as models_store_module
 
-    monkeypatch.setattr(models_store_module, "ModelsStore", _InMemoryModelsStore)
+    # Не подменяем ModelsStore для тестов, которые явно тестируют его или используют реальные хранилища
+    test_file = request.node.fspath.strpath if hasattr(request.node, "fspath") else ""
+    test_name = request.node.name if hasattr(request.node, "name") else ""
+
+    # Исключаем тесты, которые используют реальный ModelsStore
+    should_skip_patch = (
+        "test_models_store.py" in test_file
+        or "integration_with_postgres_stores" in test_name
+    )
+
+    if not should_skip_patch:
+        monkeypatch.setattr(models_store_module, "ModelsStore", _InMemoryModelsStore)
+
     # Создаём совместимый с AdminsStore объект для тестов
 
     class _TestAdminsStore:

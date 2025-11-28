@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres_test:
     image: postgres:16-alpine
@@ -30,4 +28,3 @@ services:
       retries: 10
     tmpfs:
       - /data  # Используем tmpfs для быстрой очистки после тестов
-

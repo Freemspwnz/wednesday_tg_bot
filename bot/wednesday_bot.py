@@ -289,7 +289,7 @@ class WednesdayBot:
 
                 for target_chat in targets:
                     # Проверяем, не было ли уже отправлено в этот чат в этот тайм-слот
-                    if self.dispatch_registry.is_dispatched(slot_date, slot_time, target_chat):
+                    if await self.dispatch_registry.is_dispatched(slot_date, slot_time, target_chat):
                         self.logger.info(
                             f"Пропускаем отправку в {target_chat} - уже отправлено в слот {slot_date}_{slot_time}",
                         )

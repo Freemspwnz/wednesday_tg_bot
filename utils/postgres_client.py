@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import asyncpg
 
 from utils.config import config
@@ -21,6 +23,7 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 _pool: asyncpg.Pool | None = None
+_pool_loop: asyncio.AbstractEventLoop | None = None
 
 
 async def init_postgres_pool(
@@ -50,7 +53,19 @@ async def init_postgres_pool(
     Raises:
         Exception: при ошибке подключения или проверки соединения.
     """
-    global _pool  # noqa: PLW0603
+    global _pool, _pool_loop  # noqa: PLW0603
+
+    # Проверяем, был ли пул создан в другом event loop
+    current_loop = asyncio.get_running_loop()
+    if _pool is not None and _pool_loop is not None and _pool_loop is not current_loop:
+        # Пул был создан в другом loop, закрываем его и создаём новый
+        logger.warning("Пул Postgres был создан в другом event loop, пересоздаём пул")
+        try:
+            await _pool.close()
+        except Exception:
+            pass
+        _pool = None
+        _pool_loop = None
 
     if _pool is not None:
         return _pool
@@ -80,6 +95,9 @@ async def init_postgres_pool(
         async with _pool.acquire() as conn:
             await conn.execute("SELECT 1;")
 
+        # Сохраняем ссылку на event loop, в котором был создан пул
+        _pool_loop = current_loop
+
         logger.info("Пул подключений Postgres успешно инициализирован")
         return _pool
     except Exception as exc:  # pragma: no cover - защитное логирование
@@ -107,7 +125,7 @@ async def close_postgres_pool() -> None:
     """
     Закрывает пул подключений к PostgreSQL, если он был инициализирован.
     """
-    global _pool  # noqa: PLW0603
+    global _pool, _pool_loop  # noqa: PLW0603
 
     if _pool is not None:
         try:
@@ -117,3 +135,4 @@ async def close_postgres_pool() -> None:
             logger.error(f"Ошибка при закрытии пула Postgres: {exc}")
         finally:
             _pool = None
+            _pool_loop = None

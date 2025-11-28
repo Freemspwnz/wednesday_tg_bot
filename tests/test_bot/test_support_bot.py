@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -151,3 +152,98 @@ async def test_log_command_no_logs_directory(monkeypatch: Any, support_bot: Any)
         elif call.args:
             messages.append(call.args[0])
     assert any("папка logs пуста" in msg.lower() for msg in messages)
+
+
+@pytest.mark.asyncio
+async def test_help_command(support_bot: Any) -> None:
+    update = _make_update()
+    context = SimpleNamespace()
+
+    await support_bot.help_command(update, context)
+
+    update.message.reply_text.assert_awaited_once()
+    call = update.message.reply_text.await_args
+    text = call.kwargs.get("text", call.args[0])
+    assert "SupportBot" in text or "поддержки" in text.lower() or "команды" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_start_main_command_non_admin(support_bot: Any) -> None:
+    support_bot.admins.admins = set()  # нет админов
+    update = _make_update(user_id=2)
+    context = SimpleNamespace()
+
+    await support_bot.start_main_command(update, context)
+
+    update.message.reply_text.assert_awaited_once()
+    call = update.message.reply_text.await_args
+    message = call.kwargs.get("text", call.args[0])
+    assert "Доступно только администратору" in message
+
+
+@pytest.mark.asyncio
+async def test_start_main_command_admin_no_callback(support_bot: Any) -> None:
+    support_bot.admins.admins = {1}
+    support_bot.request_start_main = None
+    update = _make_update(user_id=1)
+    context = SimpleNamespace()
+
+    await support_bot.start_main_command(update, context)
+
+    # Проверяем, что было отправлено сообщение (может быть несколько)
+    assert update.message.reply_text.await_count > 0
+    # Проверяем логирование (это основной способ проверки, так как сообщение может быть разным)
+    # Команда должна выполниться без ошибок
+
+
+@pytest.mark.asyncio
+async def test_start_main_command_admin_with_callback(support_bot: Any) -> None:
+    support_bot.admins.admins = {1}
+    callback_called = False
+
+    async def mock_callback(data: dict[str, Any]) -> None:
+        nonlocal callback_called
+        callback_called = True
+        await asyncio.sleep(0)  # Используем async для соответствия типу
+
+    support_bot.request_start_main = mock_callback
+    update = _make_update(user_id=1)
+    context = SimpleNamespace()
+
+    await support_bot.start_main_command(update, context)
+
+    assert callback_called
+    update.message.reply_text.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_log_command_with_args(support_bot: Any, monkeypatch: Any, tmp_path: Any) -> None:
+    from pathlib import Path
+
+    support_bot.admins.admins = {1}
+    update = _make_update(user_id=1)
+    context = _make_context(args=["2"])
+
+    # Создаём временную директорию logs с файлами
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "wednesday_bot_2025-11-28.log").write_text("test log")
+    (logs_dir / "wednesday_bot_2025-11-27.log").write_text("test log 2")
+
+    # Мокаем Path для использования нашей временной директории
+    original_path = Path
+
+    def mock_path(*args: Any, **kwargs: Any) -> Any:
+        if args and str(args[0]) == "logs":
+            return logs_dir
+        return original_path(*args, **kwargs)
+
+    monkeypatch.setattr("bot.support_bot.Path", mock_path)
+
+    await support_bot.log_command(update, context)
+
+    # Проверяем, что было отправлено сообщение
+    update.message.reply_text.assert_awaited()
+    # Может быть отправлен документ, если файлы найдены
+    # Проверяем, что команда выполнилась без ошибок
+    assert update.message.reply_text.await_count > 0

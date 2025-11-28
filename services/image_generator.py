@@ -208,7 +208,7 @@ class ImageGenerator:
                         try:
                             await metrics.increment_generation_success()
                             await metrics.add_generation_time(elapsed)
-                        if attempt > 0:
+                            if attempt > 0:
                                 await metrics.increment_generation_retry()
                         except Exception as exc:
                             self.logger.warning(f"Не удалось обновить метрики успешной генерации: {exc}")

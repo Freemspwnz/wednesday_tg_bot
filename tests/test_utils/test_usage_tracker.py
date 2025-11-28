@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 import pytest
 
@@ -29,7 +30,7 @@ def test_usage_tracker_initial_save() -> None:
 
 
 @pytest.mark.asyncio
-async def test_usage_tracker_increment_and_limits() -> None:
+async def test_usage_tracker_increment_and_limits(cleanup_tables: Any) -> None:
     tracker = UsageTracker(
         storage_path="ignored.json",
         monthly_quota=TEST_QUOTA_10,
@@ -47,7 +48,7 @@ async def test_usage_tracker_increment_and_limits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_usage_tracker_threshold_and_totals() -> None:
+async def test_usage_tracker_threshold_and_totals(cleanup_tables: Any) -> None:
     tracker = UsageTracker(
         storage_path="ignored.json",
         monthly_quota=TEST_QUOTA_15,

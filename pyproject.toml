@@ -165,6 +165,6 @@ ignore_errors = true
 [tool.pytest.ini_options]
 addopts = "-v -ra --tb=short"
 testpaths = ["tests"]
-asyncio_mode = "auto"
+asyncio_mode = "strict"
 filterwarnings = ["ignore::DeprecationWarning"]
 pythonpath = ["."]

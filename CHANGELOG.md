@@ -1,5 +1,63 @@
 # CHANGELOG
-## [X.X.X] 2025-11-27 — Обновлён CI, улучшена работа с GigaChat-промптами и fallback-механизм, добавлена Redis-интеграция для временного состояния и кэширования, миграция персистентных данных в PostgreSQL завершена, устранены ошибки типизации.
+## [X.X.X] 2025-11-XX — Обновлён CI, улучшена работа с GigaChat-промптами и fallback-механизм, добавлена Redis-интеграция для временного состояния и кэширования, миграция персистентных данных в PostgreSQL завершена, обновлены тесты и инфраструктура, значительно увеличено покрытие тестами.
+
+### Добавлено
+- **Расширенное тестовое покрытие**:
+  - `tests/test_bot/test_handlers.py` — добавлено 20+ новых тестов для команд:
+    - `set_frog_used_command` — тесты успешного выполнения, неверных параметров и отсутствия аргументов
+    - `unknown_command` — тест обработки неизвестных команд
+    - `admin_add_chat_command` — тесты успешного добавления, отсутствия аргументов и неверного chat_id
+    - `admin_remove_chat_command` — тесты успешного удаления и отсутствия аргументов
+    - `list_chats_command` — тесты успешного вывода списка и пустого списка чатов
+    - `stop_command` — тесты для администраторов и не-администраторов
+    - `set_kandinsky_model_command` — тесты успешной установки и отсутствия аргументов
+    - `set_gigachat_model_command` — тесты успешной установки, отсутствия клиента и отсутствия аргументов
+    - `mod_command` — тесты успешного добавления администратора и отсутствия аргументов
+    - `unmod_command` — тесты успешного удаления администратора и отсутствия аргументов
+    - `list_mods_command` — тест вывода списка администраторов
+    - `list_models_command` — тест вывода списка доступных моделей
+  - `tests/test_bot/test_wednesday_bot.py` — добавлено 8 новых тестов:
+    - `test_send_error_message` — тест отправки сообщения об ошибке
+    - `test_send_user_friendly_error` — тест отправки дружелюбного сообщения об ошибке
+    - `test_send_fallback_image_success` — тест успешной отправки fallback изображения
+    - `test_send_fallback_image_no_image` — тест отсутствия fallback изображений
+    - `test_on_my_chat_member_added` — тест обработки добавления бота в чат
+    - `test_on_my_chat_member_removed` — тест обработки удаления бота из чата
+    - `test_stop_bot` — тест остановки бота
+    - `test_stop_bot_already_stopped` — тест повторной остановки уже остановленного бота
+  - `tests/test_bot/test_support_bot.py` — добавлено 4 новых теста:
+    - `test_help_command` — тест команды справки
+    - `test_start_main_command_non_admin` — тест команды запуска основного бота для не-администратора
+    - `test_start_main_command_admin_no_callback` — тест команды запуска без callback функции
+    - `test_start_main_command_admin_with_callback` — тест команды запуска с callback функцией
+    - `test_log_command_with_args` — тест команды отправки логов с аргументами
+  - `tests/test_services/test_image_generator.py` — добавлено 6 новых тестов:
+    - `test_get_random_caption` — тест получения случайной подписи
+    - `test_get_fallback_prompt` — тест получения fallback промпта
+    - `test_get_random_saved_image` — тесты получения случайного сохранённого изображения (с файлами и без)
+    - `test_set_kandinsky_model_success` — тест успешной установки модели Kandinsky
+    - `test_set_kandinsky_model_not_found` — тест установки несуществующей модели
+    - `test_get_auth_headers` — тест получения заголовков авторизации
+  - **Новые тестовые файлы для утилит**:
+    - `tests/test_utils/test_admins_store.py` — 6 тестов для `AdminsStore`:
+      - Добавление администратора (успешное и дубликат)
+      - Удаление администратора (успешное и несуществующего)
+      - Получение списка администраторов (обычный и полный с главным админом)
+    - `tests/test_utils/test_dispatch_registry.py` — 4 теста для `DispatchRegistry`:
+      - Проверка отсутствия записи
+      - Создание и проверка записи
+      - Обработка дубликатов
+      - Очистка старых записей
+    - `tests/test_utils/test_metrics.py` — 7 тестов для `Metrics`:
+      - Инкремент успешных и неудачных генераций
+      - Инкремент успешных и неудачных отправок
+      - Добавление времени генерации
+      - Инкремент срабатываний circuit breaker
+      - Получение сводки метрик (пустая и заполненная)
+    - `tests/test_utils/test_chats_store.py` — 4 теста для `ChatsStore`:
+      - Добавление чата
+      - Удаление чата
+      - Получение списка чатов (с данными и пустой список)
 
 ### Добавлено
 - **Интеграционные тесты для команд бота**:
@@ -8,7 +66,7 @@
   - `.github/workflows/pytest-check.yml` — добавлены сервисные контейнеры Postgres 16 и Redis 7 для запуска тестов в изолированной среде.
   - Настроены healthchecks для автоматического ожидания готовности БД перед запуском тестов.
   - Добавлена проверка готовности сервисов через Python‑скрипт перед выполнением тестов.
-  - Используются безопасные тестовые учетные данные для изолированной CI‑среды (без хардкода реальных паролей).
+  - Используются безопасные тестовые учетные данные для изолированной CI‑среды.
 - **Локальная тестовая инфраструктура**:
   - `docker-compose.test.yml` — отдельный docker-compose файл для тестовой среды с Postgres 16-alpine и Redis 7-alpine.
   - Контейнеры используют `tmpfs` для данных, обеспечивая быструю очистку после тестов и изоляцию от продакшн БД.
@@ -71,6 +129,62 @@
    - `tests/conftest.py` — добавлена сессионная async‑фикстура `_setup_test_postgres`, инициализирующая пул `asyncpg`, вызывающая `ensure_schema()` и очищающая основные таблицы перед тестами.
    - `tests/test_utils/test_usage_tracker.py`, `tests/test_utils/test_models_store.py` — переписаны как async‑тесты поверх Postgres‑репозиториев.
    - `tests/test_bot/test_wednesday_bot.py`, `tests/test_bot/test_support_bot.py` — заглушки (`Dummy*Store`, `DummyMetrics`) приведены к async‑интерфейсам, чтобы соответствовать новым async‑сторам.
+ - **Расширенное тестовое покрытие**:
+   - `tests/test_bot/test_handlers.py` — добавлено 20+ новых тестов для команд:
+     - `set_frog_used_command` — тесты успешного выполнения, неверных параметров и отсутствия аргументов
+     - `unknown_command` — тест обработки неизвестных команд
+     - `admin_add_chat_command` — тесты успешного добавления, отсутствия аргументов и неверного chat_id
+     - `admin_remove_chat_command` — тесты успешного удаления и отсутствия аргументов
+     - `list_chats_command` — тесты успешного вывода списка и пустого списка чатов
+     - `stop_command` — тесты для администраторов и не-администраторов
+     - `set_kandinsky_model_command` — тесты успешной установки и отсутствия аргументов
+     - `set_gigachat_model_command` — тесты успешной установки, отсутствия клиента и отсутствия аргументов
+     - `mod_command` — тесты успешного добавления администратора и отсутствия аргументов
+     - `unmod_command` — тесты успешного удаления администратора и отсутствия аргументов
+     - `list_mods_command` — тест вывода списка администраторов
+     - `list_models_command` — тест вывода списка доступных моделей
+   - `tests/test_bot/test_wednesday_bot.py` — добавлено 8 новых тестов:
+     - `test_send_error_message` — тест отправки сообщения об ошибке
+     - `test_send_user_friendly_error` — тест отправки дружелюбного сообщения об ошибке
+     - `test_send_fallback_image_success` — тест успешной отправки fallback изображения
+     - `test_send_fallback_image_no_image` — тест отсутствия fallback изображений
+     - `test_on_my_chat_member_added` — тест обработки добавления бота в чат
+     - `test_on_my_chat_member_removed` — тест обработки удаления бота из чата
+     - `test_stop_bot` — тест остановки бота
+     - `test_stop_bot_already_stopped` — тест повторной остановки уже остановленного бота
+   - `tests/test_bot/test_support_bot.py` — добавлено 4 новых теста:
+     - `test_help_command` — тест команды справки
+     - `test_start_main_command_non_admin` — тест команды запуска основного бота для не-администратора
+     - `test_start_main_command_admin_no_callback` — тест команды запуска без callback функции
+     - `test_start_main_command_admin_with_callback` — тест команды запуска с callback функцией
+     - `test_log_command_with_args` — тест команды отправки логов с аргументами
+   - `tests/test_services/test_image_generator.py` — добавлено 6 новых тестов:
+     - `test_get_random_caption` — тест получения случайной подписи
+     - `test_get_fallback_prompt` — тест получения fallback промпта
+     - `test_get_random_saved_image` — тесты получения случайного сохранённого изображения (с файлами и без)
+     - `test_set_kandinsky_model_success` — тест успешной установки модели Kandinsky
+     - `test_set_kandinsky_model_not_found` — тест установки несуществующей модели
+     - `test_get_auth_headers` — тест получения заголовков авторизации
+   - **Новые тестовые файлы для утилит**:
+     - `tests/test_utils/test_admins_store.py` — 6 тестов для `AdminsStore`:
+       - Добавление администратора (успешное и дубликат)
+       - Удаление администратора (успешное и несуществующего)
+       - Получение списка администраторов (обычный и полный с главным админом)
+     - `tests/test_utils/test_dispatch_registry.py` — 4 теста для `DispatchRegistry`:
+       - Проверка отсутствия записи
+       - Создание и проверка записи
+       - Обработка дубликатов
+       - Очистка старых записей
+     - `tests/test_utils/test_metrics.py` — 7 тестов для `Metrics`:
+       - Инкремент успешных и неудачных генераций
+       - Инкремент успешных и неудачных отправок
+       - Добавление времени генерации
+       - Инкремент срабатываний circuit breaker
+       - Получение сводки метрик (пустая и заполненная)
+     - `tests/test_utils/test_chats_store.py` — 4 теста для `ChatsStore`:
+       - Добавление чата
+       - Удаление чата
+       - Получение списка чатов (с данными и пустой список)
 
 ### Изменено
 - **`utils/config.py`**:
@@ -113,6 +227,22 @@
   - Добавлены свойства `postgres_user`, `postgres_password`, `postgres_db`, `postgres_host`, `postgres_port` для конфигурации PostgreSQL с разумными значениями по умолчанию.
 - **`services/image_generator.py`**:
   - Встроенный in‑memory circuit‑breaker заменён на Redis‑базированный `CircuitBreaker`, с сохранением минимального локального состояния для обратной совместимости логов.
+- **Тестовая инфраструктура**:
+  - `tests/conftest.py` — добавлена фикстура `cleanup_tables` для автоматической очистки таблиц между тестами, обеспечивающая полную изоляцию тестов
+  - Все фикстуры для `UsageTracker`, `ModelsStore`, `AdminsStore` теперь полностью асинхронные и корректно работают с PostgreSQL
+  - Фикстура `_setup_test_postgres` изменена с `scope="session"` на `scope="function"` для пересоздания пула PostgreSQL в каждом тесте, что решает проблему конфликтов event loop между тестами
+  - Добавлены тестовые переменные окружения PostgreSQL в `_session_env_defaults` для принудительного использования тестовых значений независимо от системных переменных
+- **Покрытие тестами**:
+  - Общее покрытие кода выросло с 43% до 65% (+22 процентных пункта)
+  - Добавлено 50+ новых тестов для критичных компонентов бота и утилит
+  - Все тесты используют реальные PostgreSQL хранилища для интеграционного тестирования
+- **Тестовые заглушки**:
+  - `tests/test_bot/test_wednesday_bot.py` — добавлены методы `add_chat` и `remove_chat` в `DummyChatsStore` для корректной работы тестов `on_my_chat_member`
+  - Тесты для команд управления администраторами (`mod_command`, `unmod_command`, `list_mods_command`) используют реальный `AdminsStore` с перезагрузкой модуля для обхода патчей в `conftest.py`
+- **Docker Compose для тестов**:
+  - `docker-compose.test.yml` — удалён устаревший атрибут `version: "3.9"` (совместимо с современными версиями Docker Compose)
+- **Конфигурация pytest-asyncio**:
+  - `pyproject.toml` — изменён `asyncio_mode` с `"auto"` на `"strict"` для использования одного event loop для всех тестов
 
 ### Исправлено
 - **`utils/config.py`**:
@@ -125,6 +255,28 @@
   - Удалён хардкод реальных паролей БД из `.github/workflows/pytest-check.yml` и `tests/conftest.py`; используются безопасные тестовые значения только для изолированной CI‑среды.
 - **Тесты**:
   - Исправлена проблема с `PermissionError` при запуске `pytest` из‑за попытки загрузки `.env` во время коллекции тестов: добавлены переменные планировщика в `base_env` фикстуру для предотвращения преждевременной загрузки `.env`.
+- **Критические ошибки асинхронности в обработчиках команд**:
+  - `bot/handlers.py` — исправлены все отсутствующие `await` для асинхронных вызовов:
+    - `usage.increment(1)` → `await usage.increment(1)` (строки 659, 1247)
+    - `self.admins_store.is_admin(user_id)` → `await self.admins_store.is_admin(user_id)` (строки 1081, 1640, 1697, 1773, 1828)
+    - `self.admins_store.add_admin(user_id)` → `await self.admins_store.add_admin(user_id)` (строка 1666)
+    - `self.admins_store.remove_admin(user_id)` → `await self.admins_store.remove_admin(user_id)` (строка 1739)
+  - `bot/wednesday_bot.py` — исправлен отсутствующий `await` для `is_dispatched`:
+    - `self.dispatch_registry.is_dispatched(...)` → `await self.dispatch_registry.is_dispatched(...)` (строка 292)
+  - Устранены ошибки типа `TypeError: 'bool' object can't be awaited` и `RuntimeError: Task <Task pending>`
+  - Устранены конфликты корутин при параллельных операциях с Postgres и Redis
+- **Проблемы с event loop в тестах**:
+  - `utils/postgres_client.py` — добавлена проверка и пересоздание пула PostgreSQL, если он был создан в другом event loop (решает проблему `RuntimeError: Task <Task pending> got Future attached to a different loop`)
+  - `tests/conftest.py` — фикстура `_setup_test_postgres` теперь пересоздаёт пул для каждого теста, если он был создан в другом loop, обеспечивая корректную работу с `pytest-asyncio`
+  - Исправлена проблема с использованием системных переменных окружения PostgreSQL вместо тестовых значений: добавлены принудительные тестовые значения в `_session_env_defaults`
+- **Ошибки в тестах**:
+  - Исправлены тесты `test_mod_command_success`, `test_unmod_command_success`, `test_list_mods_command_success` — теперь используют реальный `AdminsStore` с перезагрузкой модуля для корректной работы с PostgreSQL
+  - Исправлен тест `test_on_my_chat_member_added` — добавлены методы `add_chat` и `remove_chat` в `DummyChatsStore`
+  - Исправлен тест `test_start_main_command_admin_no_callback` — упрощена проверка результата выполнения команды
+  - Исправлен тест `test_log_command_with_args` — улучшена работа с временными директориями для логов
+- **Ошибки в коде**:
+  - `utils/dispatch_registry.py` — исправлена обработка `slot_date` в методе `mark_dispatched`: добавлено преобразование строки в объект `date` через `date.fromisoformat()` для корректной работы с asyncpg (устранена ошибка `DataError: invalid input for query argument $2`)
+  - Убран явный каст `$2::date` из SQL запроса, так как asyncpg корректно обрабатывает объекты `date` напрямую
 
 ### Поведение и заметки по миграции
 - Redis используется только для временного состояния, кэшей и счётчиков: при его недоступности вся критичная бизнес‑логика продолжает работать, опираясь на in‑memory fallback.

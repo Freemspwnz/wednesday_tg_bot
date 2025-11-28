@@ -656,7 +656,7 @@ class CommandHandlers:
                     pass
                 # Успешная генерация — увеличиваем счетчик
                 if usage:
-                    usage.increment(1)
+                    await usage.increment(1)
 
                 # Удаляем статусное сообщение
                 if status_message:
@@ -1078,7 +1078,7 @@ class CommandHandlers:
         user_id = update.effective_user.id
         self.logger.info(f"Получена команда /force_send от пользователя {user_id}")
 
-        if not self.admins_store.is_admin(user_id):
+        if not await self.admins_store.is_admin(user_id):
             try:
                 await self._retry_on_connect_error(
                     update.message.reply_text,
@@ -1244,7 +1244,7 @@ class CommandHandlers:
                         pass
                     # Увеличиваем счетчик использования
                     if usage:
-                        usage.increment(1)
+                        await usage.increment(1)
                 else:
                     use_fallback = True
                     self.logger.warning("Генерация изображения вернула None, используем fallback")
@@ -1637,7 +1637,7 @@ class CommandHandlers:
         if not update.message or not update.effective_user:
             return
 
-        if not self.admins_store.is_admin(update.effective_user.id):
+        if not await self.admins_store.is_admin(update.effective_user.id):
             try:
                 await self._retry_on_connect_error(
                     update.message.reply_text,
@@ -1663,7 +1663,7 @@ class CommandHandlers:
 
         try:
             user_id = int(context.args[0])
-            success = self.admins_store.add_admin(user_id)
+            success = await self.admins_store.add_admin(user_id)
             if success:
                 await self._retry_on_connect_error(
                     update.message.reply_text,
@@ -1694,7 +1694,7 @@ class CommandHandlers:
         if not update.message or not update.effective_user:
             return
 
-        if not self.admins_store.is_admin(update.effective_user.id):
+        if not await self.admins_store.is_admin(update.effective_user.id):
             try:
                 await self._retry_on_connect_error(
                     update.message.reply_text,
@@ -1736,7 +1736,7 @@ class CommandHandlers:
                     self.logger.error(f"Не удалось отправить сообщение об ошибке после {3} попыток: {e}")
                 return
 
-            success = self.admins_store.remove_admin(user_id)
+            success = await self.admins_store.remove_admin(user_id)
             if success:
                 await self._retry_on_connect_error(
                     update.message.reply_text,
@@ -1770,7 +1770,7 @@ class CommandHandlers:
         user_id = update.effective_user.id
         self.logger.info(f"Получена команда /list_mods от пользователя {user_id}")
 
-        if not self.admins_store.is_admin(user_id):
+        if not await self.admins_store.is_admin(user_id):
             try:
                 await self._retry_on_connect_error(
                     update.message.reply_text,
@@ -1825,7 +1825,7 @@ class CommandHandlers:
         user_id = update.effective_user.id
         self.logger.info(f"Получена команда /list_models от пользователя {user_id}")
 
-        if not self.admins_store.is_admin(user_id):
+        if not await self.admins_store.is_admin(user_id):
             await self._retry_on_connect_error(
                 update.message.reply_text,
                 "❌ Доступно только администратору",

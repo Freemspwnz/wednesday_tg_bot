@@ -46,18 +46,22 @@ class DispatchRegistry:
         """
         Помечает сочетание (дата, время, чат) как уже отправленное.
         """
+        from datetime import date as date_type
+
         pool = get_postgres_pool()
         key = self._key(slot_date, slot_time, chat_id)
+        # Преобразуем строку в date объект для asyncpg
+        slot_date_obj = date_type.fromisoformat(slot_date) if isinstance(slot_date, str) else slot_date
         async with pool.acquire() as conn:
             try:
                 await conn.execute(
                     """
                     INSERT INTO dispatch_registry (key, slot_date, slot_time, chat_id, created_at)
-                    VALUES ($1, $2::date, $3, $4, NOW())
+                    VALUES ($1, $2, $3, $4, NOW())
                     ON CONFLICT (key) DO NOTHING;
                     """,
                     key,
-                    slot_date,
+                    slot_date_obj,
                     slot_time,
                     int(chat_id),
                 )

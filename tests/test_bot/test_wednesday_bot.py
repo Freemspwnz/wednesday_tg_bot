@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -85,6 +85,14 @@ def wednesday_bot(monkeypatch: Any) -> Any:
 
         async def list_chat_ids(self) -> list[int]:
             return list(self.chat_ids)
+
+        async def add_chat(self, chat_id: int, title: str) -> None:
+            if chat_id not in self.chat_ids:
+                self.chat_ids.append(chat_id)
+
+        async def remove_chat(self, chat_id: int) -> None:
+            if chat_id in self.chat_ids:
+                self.chat_ids.remove(chat_id)
 
     class DummyDispatchRegistry:
         def __init__(self) -> None:
@@ -202,3 +210,112 @@ async def test_send_wednesday_frog_without_targets(monkeypatch: Any, wednesday_b
 
     wednesday_bot._send_error_message.assert_awaited_once()
     assert wednesday_bot.application.bot.send_photo.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_send_error_message(wednesday_bot: Any) -> None:
+    wednesday_bot.chat_id = "12345"
+    await wednesday_bot._send_error_message("Test error")
+
+    wednesday_bot.application.bot.send_message.assert_awaited_once()
+    call = wednesday_bot.application.bot.send_message.await_args
+    assert call.kwargs["chat_id"] == "12345"
+    assert "Test error" in call.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_send_user_friendly_error(wednesday_bot: Any) -> None:
+    await wednesday_bot._send_user_friendly_error(12345, "test context")
+
+    wednesday_bot.application.bot.send_message.assert_awaited_once()
+    call = wednesday_bot.application.bot.send_message.await_args
+    assert call.kwargs["chat_id"] == 12345  # noqa: PLR2004
+    assert "не удалось сгенерировать" in call.kwargs["text"].lower()
+
+
+@pytest.mark.asyncio
+async def test_send_fallback_image_success(wednesday_bot: Any) -> None:
+    wednesday_bot.image_generator.get_random_saved_image = MagicMock(return_value=(b"img", "caption"))
+    result = await wednesday_bot._send_fallback_image(12345)
+
+    assert result is True
+    wednesday_bot.application.bot.send_photo.assert_awaited_once()
+    call = wednesday_bot.application.bot.send_photo.await_args
+    assert call.kwargs["chat_id"] == 12345  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_send_fallback_image_no_image(wednesday_bot: Any) -> None:
+    wednesday_bot.image_generator.get_random_saved_image = MagicMock(return_value=None)
+    result = await wednesday_bot._send_fallback_image(12345)
+
+    assert result is False
+    assert wednesday_bot.application.bot.send_photo.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_on_my_chat_member_added(wednesday_bot: Any, cleanup_tables: Any) -> None:
+    from types import SimpleNamespace
+
+    old_member = SimpleNamespace(status="left")
+    new_member = SimpleNamespace(status="member")
+    chat = SimpleNamespace(id=99999, title="Test Chat", username="")
+    my_chat_member = SimpleNamespace(
+        old_chat_member=old_member,
+        new_chat_member=new_member,
+        chat=chat,
+    )
+    update = SimpleNamespace(my_chat_member=my_chat_member)
+
+    await wednesday_bot.on_my_chat_member(update, SimpleNamespace())
+
+    # Проверяем, что чат добавлен
+    chat_ids = await wednesday_bot.chats.list_chat_ids()
+    assert 99999 in chat_ids  # noqa: PLR2004
+    # Проверяем, что было отправлено приветствие (может быть несколько вызовов)
+    assert wednesday_bot.application.bot.send_message.await_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_on_my_chat_member_removed(wednesday_bot: Any, cleanup_tables: Any) -> None:
+    from types import SimpleNamespace
+
+    # Сначала добавляем чат
+    await wednesday_bot.chats.add_chat(99999, "Test Chat")
+
+    old_member = SimpleNamespace(status="member")
+    new_member = SimpleNamespace(status="left")
+    chat = SimpleNamespace(id=99999, title="Test Chat", username="")
+    my_chat_member = SimpleNamespace(
+        old_chat_member=old_member,
+        new_chat_member=new_member,
+        chat=chat,
+    )
+    update = SimpleNamespace(my_chat_member=my_chat_member)
+
+    await wednesday_bot.on_my_chat_member(update, SimpleNamespace())
+
+    # Проверяем, что чат удалён
+    chat_ids = await wednesday_bot.chats.list_chat_ids()
+    assert 99999 not in chat_ids  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_stop_bot(wednesday_bot: Any) -> None:
+    wednesday_bot.is_running = True
+    wednesday_bot.scheduler_task = None
+
+    await wednesday_bot.stop()
+
+    assert wednesday_bot.is_running is False
+    wednesday_bot.application.updater.stop.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stop_bot_already_stopped(wednesday_bot: Any) -> None:
+    wednesday_bot.is_running = False
+
+    await wednesday_bot.stop()
+
+    # Не должно быть попыток остановки
+    assert wednesday_bot.is_running is False
