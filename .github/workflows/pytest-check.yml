@@ -79,7 +79,7 @@ jobs:
           python -c "
           import time
           import sys
-          
+
           # Wait for Postgres (healthcheck in services ensures it's ready, but double-check)
           import asyncpg
           import asyncio
@@ -103,7 +103,7 @@ jobs:
                           print(f'✗ Postgres connection failed: {e}')
                           return False
                       time.sleep(1)
-          
+
           # Wait for Redis
           import redis
           for i in range(10):
@@ -117,7 +117,7 @@ jobs:
                       print(f'✗ Redis connection failed: {e}')
                       sys.exit(1)
                   time.sleep(1)
-          
+
           if not asyncio.run(check_postgres()):
               sys.exit(1)
           "

@@ -30,6 +30,7 @@ from services.rate_limiter import CircuitBreaker
 from utils.config import ImageConfig, config
 from utils.images_store import ImagesStore
 from utils.logger import get_logger, log_all_methods
+from utils.metrics import record_metric
 from utils.paths import FROG_IMAGES_CONTAINER_PATH, FROG_IMAGES_DIR, resolve_frog_images_dir
 from utils.prompts_store import PromptsStore
 
@@ -152,7 +153,11 @@ class ImageGenerator:
             "X-Secret": f"Secret {secret_key}",
         }
 
-    async def generate_frog_image(self, metrics: Optional["Metrics"] = None) -> tuple[bytes, str] | None:
+    async def generate_frog_image(
+        self,
+        user_id: int | None = None,
+        metrics: Optional["Metrics"] = None,
+    ) -> tuple[bytes, str] | None:
         """
         Генерирует изображение жабы с помощью Kandinsky API.
 
@@ -162,6 +167,7 @@ class ImageGenerator:
         import time
 
         start_time = time.time()
+        user_id_str = str(user_id) if user_id is not None else None
 
         # Проверяем circuit breaker (Redis‑базированный).
         try:
@@ -176,6 +182,16 @@ class ImageGenerator:
                         await metrics.increment_circuit_breaker_trip()
                     except Exception as exc:
                         self.logger.warning(f"Не удалось обновить метрики circuit breaker: {exc}")
+                # Логируем метрику ошибки (circuit breaker открыт).
+                try:
+                    await record_metric(
+                        event_type="error",
+                        user_id=user_id_str,
+                        status="circuit_breaker_open",
+                    )
+                except Exception:
+                    # Не блокируем основной поток при ошибке метрик.
+                    pass
                 return None
         except Exception as cb_err:
             # В случае проблем с Redis не блокируем генерацию — работаем как раньше.
@@ -213,6 +229,19 @@ class ImageGenerator:
             )
             prompt_hash = ""
 
+        # Записываем событие начала генерации (если есть prompt_hash).
+        if prompt_hash:
+            try:
+                await record_metric(
+                    event_type="generation",
+                    user_id=user_id_str,
+                    prompt_hash=prompt_hash,
+                    status="started",
+                )
+            except Exception:
+                # Ошибка записи метрики не должна ломать генерацию.
+                pass
+
         images_store: ImagesStore | None = None
         if prompt_hash:
             images_store = ImagesStore()
@@ -243,6 +272,18 @@ class ImageGenerator:
                             self.logger.warning(
                                 f"Не удалось обновить метрики для кеш‑хита генерации: {exc}",
                             )
+                    # Логируем событие cache_hit в Postgres.
+                    try:
+                        await record_metric(
+                            event_type="cache_hit",
+                            user_id=user_id_str,
+                            prompt_hash=existing.prompt_hash,
+                            image_hash=existing.image_hash,
+                            latency_ms=0,
+                            status="cached",
+                        )
+                    except Exception:
+                        pass
                     return image_data_cached, caption
                 except FileNotFoundError:
                     # Запись есть, но файла нет — логируем и продолжаем с живой генерацией.
@@ -300,6 +341,27 @@ class ImageGenerator:
                                 await metrics.increment_generation_retry()
                         except Exception as exc:
                             self.logger.warning(f"Не удалось обновить метрики успешной генерации: {exc}")
+                    # Логируем событие успешной генерации.
+                    image_hash: str | None = None
+                    if images_store is not None and prompt_hash:
+                        try:
+                            # Повторно читаем запись из БД; при ошибке сохранения она могла не создаться.
+                            metrics_image_record = await images_store.get_by_prompt_hash(prompt_hash)
+                            if metrics_image_record is not None:
+                                image_hash = metrics_image_record.image_hash
+                        except Exception:
+                            image_hash = None
+                    try:
+                        await record_metric(
+                            event_type="generation",
+                            user_id=user_id_str,
+                            prompt_hash=prompt_hash or None,
+                            image_hash=image_hash,
+                            latency_ms=round(elapsed * 1000),
+                            status="ok",
+                        )
+                    except Exception:
+                        pass
                     return image_data, caption
                 else:
                     self.logger.warning(f"Попытка {attempt + 1} не удалась")
@@ -310,7 +372,7 @@ class ImageGenerator:
                             self.logger.warning(f"Не удалось обновить метрики retry генерации: {exc}")
 
             except Exception as e:
-                self.logger.error(f"Ошибка при генерации (попытка {attempt + 1}): {e}")
+                self.logger.error(f"Ошибка при генерации (попытка {attempt + 1}): {e}", exc_info=True)
                 self.circuit_breaker_failures += 1
                 try:
                     await self._circuit_breaker.record_failure()
@@ -318,6 +380,17 @@ class ImageGenerator:
                     self.logger.warning(
                         f"Не удалось записать ошибку в Redis‑based circuit breaker: {cb_rec_err!s}",
                     )
+
+                # Логируем событие ошибки генерации.
+                try:
+                    await record_metric(
+                        event_type="error",
+                        user_id=user_id_str,
+                        prompt_hash=prompt_hash or None,
+                        status="error",
+                    )
+                except Exception:
+                    pass
 
                 # Если это не последняя попытка, ждем перед следующей
                 if attempt < self.max_retries - 1:
@@ -332,6 +405,18 @@ class ImageGenerator:
                 await metrics.add_generation_time(elapsed)
             except Exception as exc:
                 self.logger.warning(f"Не удалось обновить метрики неуспешной генерации: {exc}")
+
+        # Финальное событие ошибки (если так и не получили результат).
+        try:
+            await record_metric(
+                event_type="error",
+                user_id=user_id_str,
+                prompt_hash=prompt_hash or None,
+                latency_ms=round(elapsed * 1000),
+                status="error",
+            )
+        except Exception:
+            pass
 
         self.logger.error("Все попытки генерации изображения исчерпаны")
         return None
@@ -906,7 +991,7 @@ class ImageGenerator:
         try:
             record = await prompts_store.get_or_create_prompt(prompt)
             self.logger.info(
-                f"Prompt registered in DB for generation: id={record.id}, hash={record.prompt_hash}",
+                f"Промпт зарегистрирован в БД для генерации: id={record.id}, hash={record.prompt_hash}",
             )
         except Exception as e:  # pragma: no cover - защитный фоллбек
             self.logger.error(f"Не удалось сохранить промпт в таблице prompts: {e}", exc_info=True)

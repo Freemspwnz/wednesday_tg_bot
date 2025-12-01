@@ -645,7 +645,7 @@ class CommandHandlers:
 
         try:
             # Генерируем изображение жабы
-            result = await self.image_generator.generate_frog_image()
+            result = await self.image_generator.generate_frog_image(user_id=user_id)
 
             if result:
                 image_data, caption = result
@@ -1244,7 +1244,7 @@ class CommandHandlers:
 
         if can_generate:
             try:
-                result = await self.image_generator.generate_frog_image()
+                result = await self.image_generator.generate_frog_image(user_id=user_id)
                 if result:
                     image_data, caption = result
                     # Сохраняем изображение локально

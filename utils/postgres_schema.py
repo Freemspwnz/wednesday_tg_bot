@@ -12,6 +12,7 @@
 - models_gigachat  ← настройки и список моделей GigaChat
 - prompts          ← метаданные промптов GigaChat / Kandinsky
 - images           ← метаданные content-addressable хранилища картинок
+- metrics_events   ← логи отдельных событий генерации / кеша / ошибок
 
 Создание таблиц выполняется идемпотентно через CREATE TABLE IF NOT EXISTS,
 поэтому функцию `ensure_schema()` можно безопасно вызывать при каждом старте.
@@ -124,6 +125,22 @@ _DDL_STATEMENTS: list[str] = [
     );
 
     CREATE INDEX IF NOT EXISTS idx_images_prompt_hash ON images(prompt_hash);
+    """,
+    # Таблица событий метрик (лог отдельных событий генерации / кеша / ошибок).
+    """
+    CREATE TABLE IF NOT EXISTS metrics_events (
+        id BIGSERIAL PRIMARY KEY,
+        event_type TEXT NOT NULL, -- например: 'error', 'generation', 'cache_hit', 'cache_miss'
+        user_id TEXT NULL,
+        prompt_hash CHAR(64) NULL,
+        image_hash CHAR(64) NULL,
+        latency_ms INTEGER NULL,
+        status TEXT NULL, -- например: 'ok', 'error', 'cached', 'started'
+        timestamp TIMESTAMPTZ DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_metrics_event_type ON metrics_events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_metrics_prompt_hash ON metrics_events(prompt_hash);
     """,
 ]
 

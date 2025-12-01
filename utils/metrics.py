@@ -7,10 +7,105 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from utils.logger import get_logger, log_all_methods
 from utils.postgres_client import get_postgres_pool
+
+_logger = get_logger(__name__)
+
+
+@runtime_checkable
+class _SupportsExecute(Protocol):
+    async def execute(self, query: str, *args: object) -> object:  # pragma: no cover - протокол
+        ...
+
+
+async def record_metric(  # noqa: PLR0913
+    db: _SupportsExecute | None = None,
+    *,
+    event_type: str,
+    user_id: str | None = None,
+    prompt_hash: str | None = None,
+    image_hash: str | None = None,
+    latency_ms: int | None = None,
+    status: str | None = None,
+) -> None:
+    """
+    Записывает единичное событие в таблицу metrics_events.
+
+    Параметры:
+        db: Необязательный объект с методом execute (asyncpg.Connection или пул).
+            Если не указан, будет получен пул через get_postgres_pool().
+        event_type: Тип события ('error', 'generation', 'cache_hit', 'cache_miss' и т.п.).
+        user_id: Идентификатор пользователя (например, Telegram user_id).
+        prompt_hash: Хэш промпта (sha256, 64-символьное hex-представление).
+        image_hash: Хэш изображения (sha256, 64-символьное hex-представление).
+        latency_ms: Латентность в миллисекундах.
+        status: Статус события ('ok', 'error', 'cached', 'started' и т.п.).
+
+    Примечание по производительности:
+        В текущей реализации запись в таблицу выполняется напрямую в горячем пути.
+        При росте нагрузки рекомендуется вынести запись событий в отдельную
+        очередь (например, Redis Stream или фоновые задачи), а в этой функции
+        только публиковать событие.
+    """
+
+    # Защита от пустого event_type.
+    if not event_type:
+        _logger.warning("record_metric: пропущена запись события из-за пустого event_type")
+        return
+
+    args: list[object] = [
+        event_type,
+        user_id,
+        prompt_hash,
+        image_hash,
+        latency_ms,
+        status,
+    ]
+
+    try:
+        if db is not None:
+            await db.execute(
+                """
+                INSERT INTO metrics_events (
+                    event_type,
+                    user_id,
+                    prompt_hash,
+                    image_hash,
+                    latency_ms,
+                    status
+                )
+                VALUES ($1, $2, $3, $4, $5, $6);
+                """,
+                *args,
+            )
+        else:
+            pool = get_postgres_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO metrics_events (
+                        event_type,
+                        user_id,
+                        prompt_hash,
+                        image_hash,
+                        latency_ms,
+                        status
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6);
+                    """,
+                    *args,
+                )
+
+        _logger.info(
+            "Событие метрики записано: "
+            f"type={event_type} prompt={prompt_hash} user={user_id} image={image_hash} "
+            f"latency_ms={latency_ms} status={status}",
+        )
+    except Exception as exc:  # pragma: no cover - защитное логирование
+        _logger.error(f"record_metric: не удалось записать событие метрики: {exc}", exc_info=True)
 
 
 @log_all_methods()
@@ -149,3 +244,87 @@ class Metrics:
             "dispatches_failed": disp_failed,
             "circuit_breaker_trips": trips,
         }
+
+
+async def get_daily_generation_stats(days: int = 7) -> list[dict[str, Any]]:
+    """
+    Возвращает агрегированную статистику генераций по дням за последние N дней.
+
+    Для каждого дня рассчитываются:
+    - количество успешных генераций;
+    - средняя латентность (ms) по успешным генерациям.
+    """
+    pool = get_postgres_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                date_trunc('day', timestamp) AS day,
+                COUNT(*) FILTER (
+                    WHERE event_type = 'generation' AND status = 'ok'
+                ) AS generations_ok,
+                AVG(latency_ms) FILTER (
+                    WHERE event_type = 'generation'
+                      AND status = 'ok'
+                      AND latency_ms IS NOT NULL
+                ) AS avg_latency_ms
+            FROM metrics_events
+            WHERE timestamp >= NOW() - ($1 || ' days')::interval
+            GROUP BY date_trunc('day', timestamp)
+            ORDER BY day DESC;
+            """,
+            str(days),
+        )
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        result.append(
+            {
+                "day": row["day"],
+                "generations_ok": int(row["generations_ok"] or 0),
+                "avg_latency_ms": float(row["avg_latency_ms"]) if row["avg_latency_ms"] is not None else None,
+            },
+        )
+    return result
+
+
+async def get_top_prompts(limit: int = 10) -> list[dict[str, Any]]:
+    """
+    Возвращает топ промптов по количеству успешных генераций.
+
+    Args:
+        limit: Максимальное количество строк в выдаче.
+    """
+    pool = get_postgres_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                prompt_hash,
+                COUNT(*) FILTER (
+                    WHERE event_type = 'generation' AND status = 'ok'
+                ) AS generations_ok,
+                AVG(latency_ms) FILTER (
+                    WHERE event_type = 'generation'
+                      AND status = 'ok'
+                      AND latency_ms IS NOT NULL
+                ) AS avg_latency_ms
+            FROM metrics_events
+            WHERE prompt_hash IS NOT NULL
+            GROUP BY prompt_hash
+            ORDER BY generations_ok DESC
+            LIMIT $1;
+            """,
+            int(limit),
+        )
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        result.append(
+            {
+                "prompt_hash": row["prompt_hash"],
+                "generations_ok": int(row["generations_ok"] or 0),
+                "avg_latency_ms": float(row["avg_latency_ms"]) if row["avg_latency_ms"] is not None else None,
+            },
+        )
+    return result
