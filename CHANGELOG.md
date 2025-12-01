@@ -87,6 +87,12 @@
     - `prompt_storage` → примонтирован в контейнер по пути `/app/data/prompts` для файлового хранилища промптов GigaChat.
   - Весь файловый ввод/вывод бота (изображения, логи, промпты) переведён на работу только с этими директориями внутри контейнера.
   - Добавлены рекомендации по резервному копированию томов в `README.md` и `docs/INSTALLATION.md`.
+  - Таблица `prompts` используется как каноничное хранилище метаданных промптов (raw/normalized/hash), а файловый `prompt_storage` служит fallback-слоем.
+- **PostgreSQL-хранилище промптов**:
+  - Добавлена таблица `prompts` (через `utils/postgres_schema.ensure_schema()` и SQL-миграции `docs/sql/001_add_prompts_table*.sql`) с полями `raw_text`, `normalized_text`, `prompt_hash`, `created_at`, `ab_group` и индексом `idx_prompts_prompt_hash`.
+  - Реализован репозиторий `utils/prompts_store.PromptsStore` с методами `get_or_create_prompt`, `get_prompt_by_hash`, `get_random_prompt`, нормализующий текст промпта (strip) и считающий sha256‑hash от нормализованного текста.
+  - `services/image_generator.ImageGenerator._generate_prompt()` теперь регистрирует все успешные промпты (GigaChat + fallback) в таблице `prompts` и использует БД как основной источник промптов при недоступности GigaChat.
+  - Добавлены тесты `tests/test_utils/test_prompts_store.py` и `tests/test_utils/test_prompts_migration_sql.py`, проверяющие корректность схемы, дедупликацию по hash и возможность применения/отката миграций.
 - **Workflow `docker-build.yml`, `Dockerfile`, `.dockerignore`**:
   - Автоматически создаёт Docker image на основе `Dockerfile` и пушит его в GHCR.
 - **Логика ленивой загрузки `.env` в `utils/config.py`**:

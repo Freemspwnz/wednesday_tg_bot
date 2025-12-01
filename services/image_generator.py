@@ -30,6 +30,7 @@ from services.rate_limiter import CircuitBreaker
 from utils.config import ImageConfig, config
 from utils.logger import get_logger, log_all_methods
 from utils.paths import FROG_IMAGES_CONTAINER_PATH, FROG_IMAGES_DIR, resolve_frog_images_dir
+from utils.prompts_store import PromptsStore
 
 # Константы для магических чисел
 CIRCUIT_BREAKER_THRESHOLD = 5
@@ -101,9 +102,10 @@ class ImageGenerator:
         # Инициализация GigaChat клиента для генерации промптов
         self.gigachat_enabled: bool = False
         self.gigachat_client: GigaChatClient | None = None
-        # Хранилище промптов:
-        # - позволяет переиспользовать уже сгенерированные GigaChat-промпты при падении API;
-        # - даёт единое место для будущих A/B-тестов разных вариантов промптов.
+        # Файловое хранилище промптов:
+        # - исторический fallback, использовался до появления Postgres‑хранилища;
+        # - сейчас основной источник истины для промптов — таблица `prompts`,
+        #   а файлы используются только как дополнительный backup.
         self.prompt_storage: PromptStorage = PromptStorage()
         if config.gigachat_authorization_key:
             try:
@@ -747,52 +749,84 @@ class ImageGenerator:
 
         Порядок:
         1. Попытка получить промпт из GigaChat.
-        2. При любой ошибке GigaChat — берём случайный промпт из сохранённых файлов `data/prompts/`.
-        3. Если сохранённых промптов нет — вызывающий код использует статический fallback.
+        2. При любой ошибке GigaChat — берём случайный промпт из таблицы `prompts`.
+        3. Если в БД нет данных — используем файловый fallback из `data/prompts/`.
+        4. Если и файлов нет — вызывающий код использует статический fallback.
 
-        Returns:
-            Сгенерированный промпт или None при ошибке
+        При любом успешно выбранном промпте он регистрируется в таблице `prompts`
+        (raw + normalized + hash), чтобы БД оставалась каноническим источником метаданных.
         """
+        prompts_store = PromptsStore()
+        prompt: str | None = None
+
         # 1. Пытаемся сгенерировать промпт через GigaChat.
         if self.gigachat_enabled and self.gigachat_client:
             try:
-                prompt = self.gigachat_client.generate_prompt_for_kandinsky()
-                if prompt:
-                    # Сам промпт уже сохранён внутри GigaChatClient в PromptStorage.
-                    # Здесь просто возвращаем его как "основной" вариант для текущей стратегии.
-                    return prompt
+                candidate = self.gigachat_client.generate_prompt_for_kandinsky()
+                if candidate:
+                    prompt = candidate
                 else:
                     self.logger.warning(
-                        "GigaChat вернул пустой промпт, пробуем использовать сохранённые промпты из файлов",
+                        "GigaChat вернул пустой промпт, пробуем использовать сохранённые промпты из БД",
                     )
             except Exception as e:
-                # Любая ошибка GigaChat переводит нас на файловый fallback.
+                # Любая ошибка GigaChat переводит нас на fallback.
                 self.logger.error(
-                    f"Ошибка при генерации промпта через GigaChat, используем файловый fallback: {e}",
+                    f"Ошибка при генерации промпта через GigaChat, используем fallback: {e}",
                     exc_info=True,
                 )
 
-        # 2. Файловый fallback: пытаемся взять случайный промпт из `data/prompts/`.
-        try:
-            file_prompt = self.prompt_storage.get_random_prompt()
-        except Exception as e:  # на всякий случай не ломаем основную логику
-            self.logger.error(
-                f"Ошибка при получении fallback-промпта из файлового хранилища: {e}",
-                exc_info=True,
+        # 2. Fallback на сохранённые в БД промпты.
+        if prompt is None:
+            try:
+                random_record = await prompts_store.get_random_prompt()
+            except Exception as e:
+                self.logger.error(
+                    f"Ошибка при получении fallback-промпта из БД: {e}",
+                    exc_info=True,
+                )
+                random_record = None
+
+            if random_record is not None:
+                self.logger.info(
+                    "Используем fallback-промпт из таблицы prompts "
+                    f"(id={random_record.id}, hash={random_record.prompt_hash})",
+                )
+                prompt = random_record.raw_text
+
+        # 3. Файловый fallback: историческое хранилище `data/prompts/`.
+        if prompt is None:
+            try:
+                file_prompt = self.prompt_storage.get_random_prompt()
+            except Exception as e:  # на всякий случай не ломаем основную логику
+                self.logger.error(
+                    f"Ошибка при получении fallback-промпта из файлового хранилища: {e}",
+                    exc_info=True,
+                )
+                file_prompt = None
+
+            if file_prompt:
+                self.logger.info("Используем fallback-промпт из сохранённых файлов data/prompts")
+                prompt = file_prompt
+
+        # 4. Если даже файлового fallback-а нет — вызывающий код перейдёт к статическому промпту.
+        if prompt is None:
+            self.logger.warning(
+                "Fallback-промпт недоступен (ни БД, ни файлы). Будет использован статический fallback-промпт.",
             )
-            file_prompt = None
+            return None
 
-        if file_prompt:
-            self.logger.info("Используем fallback-промпт из сохранённых файлов data/prompts")
-            return file_prompt
+        # Регистрируем выбранный промпт в таблице `prompts`
+        # (алгоритм нормализации и hash реализован в репозитории).
+        try:
+            record = await prompts_store.get_or_create_prompt(prompt)
+            self.logger.info(
+                f"Prompt registered in DB for generation: id={record.id}, hash={record.prompt_hash}",
+            )
+        except Exception as e:  # pragma: no cover - защитный фоллбек
+            self.logger.error(f"Не удалось сохранить промпт в таблице prompts: {e}", exc_info=True)
 
-        # 3. Если даже файлового fallback-а нет — возвращаем None,
-        # вызывающий код перейдёт к статическому промпту из `ImageConfig.FROG_PROMPTS`.
-        self.logger.warning(
-            "Файловый fallback-промпт недоступен (нет сохранённых промптов). "
-            "Будет использован статический fallback-промпт.",
-        )
-        return None
+        return prompt
 
     @staticmethod
     def _get_fallback_prompt() -> str:

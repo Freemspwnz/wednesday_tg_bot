@@ -10,6 +10,7 @@
 - metrics          ← ранее data/metrics.json
 - models_kandinsky ← настройки и список моделей Kandinsky
 - models_gigachat  ← настройки и список моделей GigaChat
+- prompts          ← метаданные промптов GigaChat / Kandinsky
 
 Создание таблиц выполняется идемпотентно через CREATE TABLE IF NOT EXISTS,
 поэтому функцию `ensure_schema()` можно безопасно вызывать при каждом старте.
@@ -91,6 +92,21 @@ _DDL_STATEMENTS: list[str] = [
         current_model     TEXT,
         available_models  TEXT[] NOT NULL DEFAULT '{}'
     );
+    """,
+    # Таблица промптов (метаданные промптов GigaChat / Kandinsky)
+    # Хранит как исходный текст (raw), так и нормализованный (normalized),
+    # а также sha256‑хэш нормализованного текста для дедупликации и A/B‑аналитики.
+    """
+    CREATE TABLE IF NOT EXISTS prompts (
+        id               BIGSERIAL PRIMARY KEY,
+        raw_text         TEXT NOT NULL,
+        normalized_text  TEXT NOT NULL,
+        prompt_hash      CHAR(64) NOT NULL UNIQUE,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        ab_group         TEXT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_prompts_prompt_hash ON prompts(prompt_hash);
     """,
 ]
 

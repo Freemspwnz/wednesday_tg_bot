@@ -138,6 +138,7 @@ async def _setup_test_postgres() -> AsyncIterator[None]:
             """
             TRUNCATE TABLE
                 dispatch_registry,
+                prompts,
                 chats,
                 admins,
                 usage_stats,
@@ -183,6 +184,7 @@ async def cleanup_tables() -> AsyncIterator[None]:
                     """
                     TRUNCATE TABLE
                         dispatch_registry,
+                        prompts,
                         chats,
                         admins,
                         usage_stats,
