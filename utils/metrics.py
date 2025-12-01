@@ -11,6 +11,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from utils.logger import get_logger, log_all_methods
 from utils.postgres_client import get_postgres_pool
+from utils.redis_client import safe_redis_call
 
 _logger = get_logger(__name__)
 
@@ -32,11 +33,12 @@ async def record_metric(  # noqa: PLR0913
     status: str | None = None,
 ) -> None:
     """
-    Записывает единичное событие в таблицу metrics_events.
+    Публикует единичное событие метрики в очередь (Redis Stream).
 
     Параметры:
         db: Необязательный объект с методом execute (asyncpg.Connection или пул).
-            Если не указан, будет получен пул через get_postgres_pool().
+            Если не указан, может использоваться как fallback для прямой
+            записи в Postgres при недоступности очереди.
         event_type: Тип события ('error', 'generation', 'cache_hit', 'cache_miss' и т.п.).
         user_id: Идентификатор пользователя (например, Telegram user_id).
         prompt_hash: Хэш промпта (sha256, 64-символьное hex-представление).
@@ -45,10 +47,11 @@ async def record_metric(  # noqa: PLR0913
         status: Статус события ('ok', 'error', 'cached', 'started' и т.п.).
 
     Примечание по производительности:
-        В текущей реализации запись в таблицу выполняется напрямую в горячем пути.
-        При росте нагрузки рекомендуется вынести запись событий в отдельную
-        очередь (например, Redis Stream или фоновые задачи), а в этой функции
-        только публиковать событие.
+        В текущей реализации событие публикуется в Redis Stream
+        `metrics:events` с помощью быстрой команды XADD, что минимально
+        влияет на горячий путь. При необходимости дальнейшего масштабирования
+        можно добавить отдельного воркера, который будет читать события из
+        стрима и агрегировать их в Postgres или внешние системы мониторинга.
     """
 
     # Защита от пустого event_type.
@@ -56,32 +59,30 @@ async def record_metric(  # noqa: PLR0913
         _logger.warning("record_metric: пропущена запись события из-за пустого event_type")
         return
 
-    args: list[object] = [
-        event_type,
-        user_id,
-        prompt_hash,
-        image_hash,
-        latency_ms,
-        status,
-    ]
-
     try:
-        if db is not None:
-            await db.execute(
-                """
-                INSERT INTO metrics_events (
-                    event_type,
-                    user_id,
-                    prompt_hash,
-                    image_hash,
-                    latency_ms,
-                    status
-                )
-                VALUES ($1, $2, $3, $4, $5, $6);
-                """,
-                *args,
-            )
-        else:
+        # Публикуем событие в Redis Stream `metrics:events`.
+        fields: dict[str, Any] = {
+            "event_type": event_type,
+            "user_id": user_id or "",
+            "prompt_hash": prompt_hash or "",
+            "image_hash": image_hash or "",
+            "latency_ms": latency_ms if latency_ms is not None else "",
+            "status": status or "",
+        }
+        await safe_redis_call("xadd", "metrics:events", fields)
+
+        _logger.info(
+            "Событие метрики записано: "
+            f"type={event_type} prompt={prompt_hash} user={user_id} image={image_hash} "
+            f"latency_ms={latency_ms} status={status}",
+        )
+    except Exception as exc:  # pragma: no cover - защитное логирование и fallback
+        _logger.error(
+            f"record_metric: не удалось опубликовать событие метрики в Redis Stream: {exc}",
+            exc_info=True,
+        )
+        # Fallback: при недоступности очереди можем (опционально) писать напрямую в Postgres.
+        try:
             pool = get_postgres_pool()
             async with pool.acquire() as conn:
                 await conn.execute(
@@ -96,16 +97,19 @@ async def record_metric(  # noqa: PLR0913
                     )
                     VALUES ($1, $2, $3, $4, $5, $6);
                     """,
-                    *args,
+                    event_type,
+                    user_id,
+                    prompt_hash,
+                    image_hash,
+                    latency_ms,
+                    status,
                 )
-
-        _logger.info(
-            "Событие метрики записано: "
-            f"type={event_type} prompt={prompt_hash} user={user_id} image={image_hash} "
-            f"latency_ms={latency_ms} status={status}",
-        )
-    except Exception as exc:  # pragma: no cover - защитное логирование
-        _logger.error(f"record_metric: не удалось записать событие метрики: {exc}", exc_info=True)
+            _logger.info("Событие метрики сохранено напрямую в Postgres (fall back, Redis недоступен)")
+        except Exception as db_exc:  # pragma: no cover - двойной защитный контур
+            _logger.error(
+                f"record_metric: не удалось сохранить событие метрики даже в Postgres: {db_exc}",
+                exc_info=True,
+            )
 
 
 @log_all_methods()

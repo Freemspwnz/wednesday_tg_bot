@@ -176,6 +176,18 @@ class _InMemoryRedis:
             return current
 
     @staticmethod
+    async def xadd(name: str, fields: dict[str, Any], *args: object, **kwargs: object) -> str:
+        """
+        Минимальная реализация XADD для совместимости с Redis‑клиентом.
+
+        В in‑memory варианте данные потокообразно не храним — достаточно
+        вернуть фиктивный идентификатор, чтобы вызывающий код считал операцию
+        успешной и не падал.
+        """
+        _ = name, fields, args, kwargs  # заглушка для неиспользуемых аргументов
+        return "0-0"
+
+    @staticmethod
     async def close() -> None:  # совместимость с `redis.Redis.close()`
         # Для in‑memory варианта ничего закрывать не нужно.
         return
