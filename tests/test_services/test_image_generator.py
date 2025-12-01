@@ -6,6 +6,8 @@ import aiohttp
 import pytest
 
 from services.image_generator import ImageGenerator
+from utils.images_store import ImagesStore
+from utils.prompts_store import PromptsStore
 
 
 @pytest.mark.asyncio
@@ -92,6 +94,57 @@ async def test_generate_frog_image_success(monkeypatch: Any) -> None:
     image, caption = result
     assert image == b"img"
     assert caption in generator.captions
+
+
+@pytest.mark.asyncio
+async def test_generate_frog_image_uses_cache_on_existing_prompt_hash(monkeypatch: Any, cleanup_tables: Any) -> None:
+    """
+    При повторном запросе с тем же prompt_hash генератор должен использовать кеш из таблицы images,
+    а не вызывать живую генерацию второй раз.
+    """
+
+    generator = ImageGenerator()
+    generator.gigachat_enabled = False
+
+    prompt_text = "cached frog prompt"
+
+    def fake_generate_prompt() -> str:
+        return prompt_text
+
+    # Живая генерация возвращает фиксированные байты; следим за количеством вызовов.
+    generate_calls: dict[str, int] = {"count": 0}
+
+    def fake_generate_image(prompt: str) -> bytes:
+        generate_calls["count"] += 1
+        return b"cached-image-bytes"
+
+    monkeypatch.setattr(generator, "_generate_prompt", AsyncMock(side_effect=fake_generate_prompt))
+    monkeypatch.setattr(generator, "_get_fallback_prompt", MagicMock(return_value=prompt_text))
+    monkeypatch.setattr(generator, "_generate_image", AsyncMock(side_effect=fake_generate_image))
+
+    # Первый вызов — создаёт промпт и изображение, записывает их в БД.
+    result1 = await generator.generate_frog_image()
+    assert result1 is not None
+    img1, caption1 = result1
+    assert img1 == b"cached-image-bytes"
+    assert isinstance(caption1, str)
+
+    # Второй вызов с тем же промптом должен взять кеш.
+    result2 = await generator.generate_frog_image()
+    assert result2 is not None
+    img2, caption2 = result2
+    assert img2 == b"cached-image-bytes"
+    assert isinstance(caption2, str)
+
+    # Генерация должна была произойти ровно один раз.
+    assert generate_calls["count"] == 1
+
+    # В БД должна быть одна запись для этого prompt_hash.
+    prompts_store = PromptsStore()
+    prompt_record = await prompts_store.get_or_create_prompt(prompt_text)
+    images_store = ImagesStore()
+    image_record = await images_store.get_by_prompt_hash(prompt_record.prompt_hash)
+    assert image_record is not None
 
 
 @pytest.mark.asyncio

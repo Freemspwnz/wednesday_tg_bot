@@ -137,6 +137,7 @@ async def _setup_test_postgres() -> AsyncIterator[None]:
         await conn.execute(
             """
             TRUNCATE TABLE
+                images,
                 dispatch_registry,
                 prompts,
                 chats,
@@ -183,6 +184,7 @@ async def cleanup_tables() -> AsyncIterator[None]:
                 await conn.execute(
                     """
                     TRUNCATE TABLE
+                        images,
                         dispatch_registry,
                         prompts,
                         chats,

@@ -11,6 +11,7 @@
 - models_kandinsky ← настройки и список моделей Kandinsky
 - models_gigachat  ← настройки и список моделей GigaChat
 - prompts          ← метаданные промптов GigaChat / Kandinsky
+- images           ← метаданные content-addressable хранилища картинок
 
 Создание таблиц выполняется идемпотентно через CREATE TABLE IF NOT EXISTS,
 поэтому функцию `ensure_schema()` можно безопасно вызывать при каждом старте.
@@ -107,6 +108,22 @@ _DDL_STATEMENTS: list[str] = [
     );
 
     CREATE INDEX IF NOT EXISTS idx_prompts_prompt_hash ON prompts(prompt_hash);
+    """,
+    # Таблица изображений (метаданные content-addressable хранилища картинок).
+    # image_hash — sha256‑хеш содержимого файла (hex, 64 символа), уникальный идентификатор файла.
+    # prompt_hash — sha256‑хеш нормализованного промпта, FK на prompts.prompt_hash.
+    # path       — путь к файлу внутри контейнера (/app/data/frogs/<image_hash>.png).
+    """
+    CREATE TABLE IF NOT EXISTS images (
+        id          BIGSERIAL PRIMARY KEY,
+        image_hash  CHAR(64) NOT NULL UNIQUE,
+        prompt_hash CHAR(64) NOT NULL UNIQUE
+            REFERENCES prompts(prompt_hash) ON DELETE CASCADE,
+        path        TEXT NOT NULL,
+        created_at  TIMESTAMPTZ DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_images_prompt_hash ON images(prompt_hash);
     """,
 ]
 

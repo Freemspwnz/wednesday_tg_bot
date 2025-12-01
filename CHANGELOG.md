@@ -93,6 +93,12 @@
   - Реализован репозиторий `utils/prompts_store.PromptsStore` с методами `get_or_create_prompt`, `get_prompt_by_hash`, `get_random_prompt`, нормализующий текст промпта (strip) и считающий sha256‑hash от нормализованного текста.
   - `services/image_generator.ImageGenerator._generate_prompt()` теперь регистрирует все успешные промпты (GigaChat + fallback) в таблице `prompts` и использует БД как основной источник промптов при недоступности GigaChat.
   - Добавлены тесты `tests/test_utils/test_prompts_store.py` и `tests/test_utils/test_prompts_migration_sql.py`, проверяющие корректность схемы, дедупликацию по hash и возможность применения/отката миграций.
+- **PostgreSQL-хранилище изображений и content-addressable storage**:
+  - Добавлена таблица `images` в `utils/postgres_schema.ensure_schema()` и SQL-миграции `docs/sql/002_add_images_table*.sql` с полями `image_hash`, `prompt_hash` (FK на `prompts.prompt_hash`), `path`, `created_at` и индексом `idx_images_prompt_hash`.
+  - Реализован репозиторий `utils/images_store.ImagesStore` c content-addressable схемой: имя файла изображения вычисляется как `sha256(image_bytes).hexdigest()` и используется как ключ `image_hash`, файл хранится как `/app/data/frogs/<image_hash>.png`.
+  - Добавлены тесты `tests/test_utils/test_images_store.py` и `tests/test_utils/test_images_migration_sql.py`, покрывающие базовые операции, применение/откат миграций и обработку гонок при параллельной вставке (duplicate key → reuse существующей записи).
+  - Внедрён кеш изображений по `prompt_hash` в `services/image_generator.ImageGenerator.generate_frog_image()`: при повторном запросе с тем же нормализованным промптом бот сначала ищет запись в `images` и при наличии использует уже сохранённый файл (cache hit) без обращения к Kandinsky.
+  - Логика генерации и сохранения изображений переписана на строгий content-addressable storage‑паттерн: сначала вычисляется `image_hash = sha256(file_bytes).hexdigest()`, затем файл атомарно сохраняется во временный путь и переносится в конечный `/app/data/frogs/<image_hash>.png` без перезаписи уже существующих файлов.
 - **Workflow `docker-build.yml`, `Dockerfile`, `.dockerignore`**:
   - Автоматически создаёт Docker image на основе `Dockerfile` и пушит его в GHCR.
 - **Логика ленивой загрузки `.env` в `utils/config.py`**:
@@ -248,6 +254,9 @@
   - Добавлены свойства `postgres_user`, `postgres_password`, `postgres_db`, `postgres_host`, `postgres_port` для конфигурации PostgreSQL с разумными значениями по умолчанию.
 - **`services/image_generator.py`**:
   - Встроенный in‑memory circuit‑breaker заменён на Redis‑базированный `CircuitBreaker`, с сохранением минимального локального состояния для обратной совместимости логов.
+  - Добавлен слой кеширования изображений по `prompt_hash` поверх таблицы `images`: при повторной генерации с тем же нормализованным промптом бот сначала ищет запись в `images` и при наличии использует уже сохранённый файл (cache hit), а не обращается к Kandinsky.
+  - Логика сохранения изображений переписана на content-addressable storage: сначала вычисляется `image_hash = sha256(file_bytes).hexdigest()`, затем файл атомарно сохраняется во временный путь и переносится в конечный `/app/data/frogs/<image_hash>.png` без перезаписи уже существующих файлов.
+  - Добавлено подробное логирование этапов генерации и кеширования (start gen, cache hit, save file, db insert, race condition handled, fallback на живую генерацию при потере файла на диске).
 - **Тестовая инфраструктура**:
   - `tests/conftest.py` — добавлена фикстура `cleanup_tables` для автоматической очистки таблиц между тестами, обеспечивающая полную изоляцию тестов
   - Все фикстуры для `UsageTracker`, `ModelsStore`, `AdminsStore` теперь полностью асинхронные и корректно работают с PostgreSQL

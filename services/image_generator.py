@@ -28,6 +28,7 @@ from PIL import Image
 from services.prompt_generator import GigaChatClient, PromptStorage
 from services.rate_limiter import CircuitBreaker
 from utils.config import ImageConfig, config
+from utils.images_store import ImagesStore
 from utils.logger import get_logger, log_all_methods
 from utils.paths import FROG_IMAGES_CONTAINER_PATH, FROG_IMAGES_DIR, resolve_frog_images_dir
 from utils.prompts_store import PromptsStore
@@ -196,6 +197,66 @@ class ImageGenerator:
 
         self.logger.info(f"Промпт для генерации: {full_prompt}")
 
+        # Регистрируем промпт и получаем его hash для привязки изображения.
+        prompts_store = PromptsStore()
+        try:
+            prompt_record = await prompts_store.get_or_create_prompt(full_prompt)
+            prompt_hash = prompt_record.prompt_hash
+            self.logger.info(
+                f"Получен prompt_hash для генерации изображения: {prompt_hash} (id={prompt_record.id})",
+            )
+        except Exception as exc:
+            # В случае проблем с БД не блокируем генерацию, но логируем.
+            self.logger.error(
+                f"Не удалось зарегистрировать промпт в таблице prompts, отключаю кеш изображений: {exc}",
+                exc_info=True,
+            )
+            prompt_hash = ""
+
+        images_store: ImagesStore | None = None
+        if prompt_hash:
+            images_store = ImagesStore()
+            # 1. Пробуем взять изображение из кеша по prompt_hash.
+            try:
+                existing = await images_store.get_by_prompt_hash(prompt_hash)
+            except Exception as exc:  # pragma: no cover - защитный фоллбек
+                self.logger.error(
+                    f"Ошибка при обращении к ImagesStore (get_by_prompt_hash), кеш изображений отключён: {exc}",
+                    exc_info=True,
+                )
+                existing = None
+
+            if existing is not None:
+                try:
+                    image_data_cached = images_store.load_image_bytes(existing)
+                    self.logger.info(
+                        "Найдено кешированное изображение для промпта: "
+                        f"{existing.prompt_hash} \u2192 image {existing.image_hash}",
+                    )
+                    # Кеш‑хит считаем успешной "генерацией" без обращения к API.
+                    elapsed = time.time() - start_time
+                    if metrics:
+                        try:
+                            await metrics.increment_generation_success()
+                            await metrics.add_generation_time(elapsed)
+                        except Exception as exc:
+                            self.logger.warning(
+                                f"Не удалось обновить метрики для кеш‑хита генерации: {exc}",
+                            )
+                    return image_data_cached, caption
+                except FileNotFoundError:
+                    # Запись есть, но файла нет — логируем и продолжаем с живой генерацией.
+                    self.logger.warning(
+                        "Запись об изображении найдена в БД, но файл отсутствует на диске; "
+                        f"prompt_hash={existing.prompt_hash} image_hash={existing.image_hash} "
+                        f"path={existing.path}. Продолжаем живую генерацию.",
+                    )
+                except Exception as exc:  # pragma: no cover - защитный фоллбек
+                    self.logger.error(
+                        f"Ошибка при загрузке кешированного изображения из файловой системы: {exc}",
+                        exc_info=True,
+                    )
+
         # Пытаемся сгенерировать изображение с повторными попытками
         for attempt in range(self.max_retries):
             try:
@@ -206,6 +267,30 @@ class ImageGenerator:
 
                 if image_data:
                     self.logger.info("Изображение успешно сгенерировано")
+
+                    # Сохраняем изображение в content-addressable хранилище + БД.
+                    if images_store is not None and prompt_hash:
+                        try:
+                            image_record = await images_store.get_or_create_image(prompt_hash, image_data)
+                            if image_record.prompt_hash == prompt_hash:
+                                self.logger.info(
+                                    "Метаданные изображения сохранены: "
+                                    f"prompt_hash={image_record.prompt_hash} \u2192 "
+                                    f"image_hash={image_record.image_hash} (path={image_record.path})",
+                                )
+                            else:
+                                # Гонка: другая транзакция уже привязала изображение.
+                                self.logger.info(
+                                    "Обработана гонка при сохранении изображения: "
+                                    f"prompt_hash={prompt_hash}, переиспользую image_hash="
+                                    f"{image_record.image_hash} (path={image_record.path})",
+                                )
+                        except Exception as exc:  # pragma: no cover - не критично для пользователя
+                            self.logger.error(
+                                f"Ошибка при сохранении изображения в ImagesStore (метаданные/файл): {exc}",
+                                exc_info=True,
+                            )
+
                     elapsed = time.time() - start_time
                     if metrics:
                         try:
