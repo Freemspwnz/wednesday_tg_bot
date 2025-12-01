@@ -216,10 +216,10 @@ python -c "from utils.config import config; print('✓ Конфигурация 
 
 ## Запуск
 
-### Вариант A. Запуск через docker-compose (Postgres + Redis + бот)
+### Вариант A. Запуск через docker-compose (Postgres + Redis + бот + Docker volumes)
 
 1. Убедитесь, что `.env` создан и заполнен.
-2. Запустите стек сервисов:
+2. Запустите стек сервисов (Postgres, Redis, бот и именованные тома для файлов):
 
 ```bash
 docker compose up -d --build
@@ -229,6 +229,13 @@ docker compose up -d --build
 - `postgres` — PostgreSQL для всех персистентных данных бота (чаты, usage, метрики, админы, модели, реестр рассылок);
 - `redis` — Redis для кэша, rate limiter’а, circuit breaker’а и временного состояния;
 - `bot` — непосредственно Wednesday Frog Bot.
+
+Также будут автоматически созданы и подключены тома:
+
+- `frog_images` → монтируется в контейнер по пути `/app/data/frogs` и хранит все сгенерированные изображения жабы.
+- `logs` → монтируется в контейнер по пути `/app/logs` и содержит файлы логов (`wednesday_bot_YYYY-MM-DD.log` и архивы).
+- `prompt_storage` → монтируется в контейнер по пути `/app/data/prompts` и используется файловым хранилищем промптов GigaChat.
+  Промпты **не** хранятся внутри Docker‑образа, а всегда пишутся в volume `prompt_storage`.
 
 3. Просмотрите логи бота:
 
@@ -296,9 +303,14 @@ screen -dmS wednesday-bot python main.py
 
 ### Просмотр логов в реальном времени
 
-**Linux/macOS:**
+**Linux/macOS (нативный запуск):**
 ```bash
 tail -f logs/wednesday_bot_$(date +%Y-%m-%d).log
+```
+
+**Через docker compose (логи внутри контейнера, каталог /app/logs):**
+```bash
+docker compose logs -f bot
 ```
 
 ### Последние 50 строк логов
@@ -474,16 +486,32 @@ curl -x your-proxy:port https://api.fusionbrain.ai
 grep GIGACHAT_CERT_PATH .env || echo "Не указан GIGACHAT_CERT_PATH"
 ```
 
-### Очистка данных
+### Очистка данных и резервное копирование volumes
 
-**Через docker-compose (dev‑режим):**
+**Через docker-compose (dev‑режим, удаление всех данных Postgres/Redis/файловых томов):**
 ```bash
-docker compose down -v  # удалит тома Postgres и Redis
+docker compose down -v  # удалит тома Postgres, Redis и все именованные тома (включая frog_images, logs, prompt_storage)
 ```
 
 **Очистить только логи (нативный запуск):**
 ```bash
 rm logs/*.log
+```
+
+**Резервное копирование изображений, логов и промптов (Docker volumes):**
+
+```bash
+# Бэкап тома с изображениями
+docker run --rm -v wednesday_tg_bot_frog_images:/data -v "$PWD":/backup alpine \
+  sh -c "cd /data && tar czf /backup/frog_images_backup.tgz ."
+
+# Бэкап тома с логами
+docker run --rm -v wednesday_tg_bot_logs:/data -v "$PWD":/backup alpine \
+  sh -c "cd /data && tar czf /backup/logs_backup.tgz ."
+
+# Бэкап тома с файловыми промптами GigaChat
+docker run --rm -v wednesday_tg_bot_prompt_storage:/data -v "$PWD":/backup alpine \
+  sh -c "cd /data && tar czf /backup/prompt_storage_backup.tgz ."
 ```
 
 ### Перезапуск бота

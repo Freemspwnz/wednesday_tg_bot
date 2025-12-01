@@ -29,6 +29,7 @@ from services.prompt_generator import GigaChatClient, PromptStorage
 from services.rate_limiter import CircuitBreaker
 from utils.config import ImageConfig, config
 from utils.logger import get_logger, log_all_methods
+from utils.paths import FROG_IMAGES_CONTAINER_PATH, FROG_IMAGES_DIR, resolve_frog_images_dir
 
 # Константы для магических чисел
 CIRCUIT_BREAKER_THRESHOLD = 5
@@ -820,11 +821,14 @@ class ImageGenerator:
     def save_image_locally(
         self,
         image_data: bytes,
-        folder: str = "data/frogs",
+        folder: str = FROG_IMAGES_DIR,
         prefix: str = "frog",
         max_files: int = MAX_FILES_DEFAULT,
     ) -> str:
         """
+        # ВАЖНО: по умолчанию используем относительный путь `data/frogs`.
+        # Внутри Docker-контейнера при WORKDIR=/app это соответствует
+        # абсолютному пути /app/data/frogs, который примонтирован как volume.
         Сохраняет байты изображения на диск.
         При достижении лимита max_files удаляет самые старые файлы.
 
@@ -837,14 +841,22 @@ class ImageGenerator:
             Путь к сохраненному файлу или пустая строка при ошибке
         """
         try:
-            path = Path(folder)
+            # Разрешаем путь через единый helper, чтобы обеспечить единообразное
+            # поведение в контейнере и при локальном запуске.
+            path = resolve_frog_images_dir() if folder == FROG_IMAGES_DIR else Path(folder)
             path.mkdir(parents=True, exist_ok=True)
 
             # Сохраняем новый файл
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             file_path = path / f"{prefix}_{ts}.png"
             file_path.write_bytes(image_data)
-            self.logger.info(f"Изображение сохранено: {file_path.name}")
+            # Логируем как реальный путь на файловой системе, так и ожидаемый
+            # путь внутри контейнера (/app/data/frogs/...), чтобы было понятно,
+            # что файл попадает в Docker volume.
+            self.logger.info(
+                f"Изображение сохранено: {file_path} "
+                f"(контейнерный путь: {FROG_IMAGES_CONTAINER_PATH}/{file_path.name})",
+            )
 
             # Ограничим количество файлов в папке
             # Получаем все PNG файлы и сортируем по времени модификации (новейшие первые)
@@ -880,15 +892,20 @@ class ImageGenerator:
                     self.logger.debug(f"Всего файлов в папке: {len(all_files)} (лимит: {max_files})")
 
             except Exception as e:
-                self.logger.error(f"Ошибка при ограничении количества файлов: {e}")
+                self.logger.error(f"Ошибка при ограничении количества файлов в {path}: {e}")
                 # Продолжаем работу, даже если не удалось очистить старые файлы
 
             return str(file_path)
         except Exception as e:
-            self.logger.error(f"Ошибка при сохранении изображения: {e}")
+            self.logger.error(
+                (
+                    f"Ошибка при сохранении изображения в директорию {folder} "
+                    f"(контейнерный путь: {FROG_IMAGES_CONTAINER_PATH}): {e}"
+                ),
+            )
             return ""
 
-    def get_random_saved_image(self, folder: str = "data/frogs") -> tuple[bytes, str] | None:
+    def get_random_saved_image(self, folder: str = FROG_IMAGES_DIR) -> tuple[bytes, str] | None:
         """
         Получает случайное изображение из сохраненных файлов.
 
@@ -899,15 +916,20 @@ class ImageGenerator:
             Кортеж (изображение в байтах, случайная подпись) или None если нет сохраненных изображений
         """
         try:
-            path = Path(folder)
+            path = resolve_frog_images_dir() if folder == FROG_IMAGES_DIR else Path(folder)
             if not path.exists():
-                self.logger.warning(f"Папка {folder} не существует")
+                self.logger.warning(
+                    f"Папка с сохранёнными изображениями не существует: {path} "
+                    f"(контейнерный путь: {FROG_IMAGES_CONTAINER_PATH})",
+                )
                 return None
 
             # Получаем все PNG файлы
             image_files = list(path.glob("*.png"))
             if not image_files:
-                self.logger.warning(f"Нет сохраненных изображений в папке {folder}")
+                self.logger.warning(
+                    f"Нет сохраненных изображений в папке {path} (контейнерный путь: {FROG_IMAGES_CONTAINER_PATH})",
+                )
                 return None
 
             # Выбираем случайный файл
@@ -919,9 +941,17 @@ class ImageGenerator:
             # Выбираем случайную подпись
             caption = self.get_random_caption()
 
-            self.logger.info(f"Загружено случайное изображение: {random_file.name}")
+            self.logger.info(
+                f"Загружено случайное изображение: {random_file} "
+                f"(контейнерный путь: {FROG_IMAGES_CONTAINER_PATH}/{random_file.name})",
+            )
             return image_data, caption
 
         except Exception as e:
-            self.logger.error(f"Ошибка при получении случайного изображения: {e}")
+            self.logger.error(
+                (
+                    f"Ошибка при получении случайного изображения из {folder} "
+                    f"(контейнерный путь: {FROG_IMAGES_CONTAINER_PATH}): {e}"
+                ),
+            )
             return None

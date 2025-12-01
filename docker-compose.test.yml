@@ -28,3 +28,8 @@ services:
       retries: 10
     tmpfs:
       - /data  # Используем tmpfs для быстрой очистки после тестов
+
+volumes:
+  frog_images:
+  logs:
+  prompt_storage:

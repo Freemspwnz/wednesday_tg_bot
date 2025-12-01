@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16
+    image: postgres:16-alpine
     container_name: wednesday_postgres
     restart: unless-stopped
     environment:
@@ -63,9 +63,22 @@ services:
       # Переопределяем хосты для работы внутри docker-сети
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
+    volumes:
+      # Хранилище сгенерированных изображений жабы.
+      # Внутри контейнера бот читает/пишет только в /app/data/frogs.
+      - frog_images:/app/data/frogs
+      # Персистентные логи приложения.
+      # Внутри контейнера логгер пишет только в /app/logs.
+      - logs:/app/logs
+      # Хранилище промптов GigaChat (файловый fallback).
+      # Внутри контейнера промпты сохраняются в /app/data/prompts.
+      - prompt_storage:/app/data/prompts
     networks:
       - default
 
 volumes:
   wednesday_postgres_data:
   wednesday_redis_data:
+  frog_images:
+  logs:
+  prompt_storage:

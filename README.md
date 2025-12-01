@@ -98,8 +98,8 @@ wednesday_tg_bot/
 │   ├── admins_store.py          # Дополнительные администраторы (PostgreSQL)
 │   └── metrics.py               # Метрики производительности (PostgreSQL)
 ├── data/
-│   └── frogs/                   # Генерированные изображения (архив)
-├── logs/                        # Логи с ротацией
+│   └── frogs/                   # Генерированные изображения (архив, в Docker — volume frog_images → /app/data/frogs)
+├── logs/                        # Логи с ротацией (в Docker — volume logs → /app/logs)
 ├── requirements.txt             # Зависимости
 ├── .env                         # Конфигурация (создается пользователем)
 └── README.md                    # Этот файл
@@ -230,8 +230,33 @@ cd wednesday-tg-bot
 cp env_example.txt .env
 # отредактировать .env
 
-# Запуск через docker-compose (Postgres + Redis + бот)
+# Запуск через docker-compose (Postgres + Redis + бот + Docker volumes)
 docker compose up -d --build
+```
+
+### Docker volumes и файловое хранилище
+
+При запуске через `docker compose` автоматически создаются и подключаются три именованных тома:
+
+- **frog_images** — монтируется в контейнер по пути `/app/data/frogs` и используется
+  для хранения сгенерированных изображений жабы (команды `/frog`, `/force_send` и fallback‑архив).
+- **logs** — монтируется в контейнер по пути `/app/logs` и содержит все файлы логов
+  (`wednesday_bot_YYYY-MM-DD.log` с ротацией и сжатием).
+- **prompt_storage** — монтируется в контейнер по пути `/app/data/prompts` и используется
+  файловым хранилищем промптов GigaChat. Все промпты пишутся только в этот volume
+  (директорию `/app/data/prompts`), а не в образ контейнера.
+
+Для резервного копирования достаточно сохранять содержимое этих томов. Примеры:
+
+```bash
+# Резервная копия изображений и логов (host‑директории по умолчанию)
+docker compose run --rm bot sh -c 'ls -R /app/data/frogs /app/logs'
+
+# Бэкап тома frog_images в tar (извне контейнера)
+docker run --rm -v wednesday_tg_bot_frog_images:/data -v "$PWD":/backup alpine \
+  sh -c "cd /data && tar czf /backup/frog_images_backup.tgz ."
+
+# Аналогично можно сделать бэкап томов logs и prompt_storage
 ```
 
 ## Безопасность

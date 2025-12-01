@@ -176,9 +176,15 @@ class CommandHandlers:
 
         from pathlib import Path
 
-        logs_dir = Path("logs")
+        from utils.paths import LOGS_CONTAINER_PATH, LOGS_DIR
+
+        logs_dir = Path(LOGS_DIR)
         if not logs_dir.exists():
             try:
+                self.logger.info(
+                    f"Запрошена команда /log, но директория логов отсутствует: {logs_dir} "
+                    f"(контейнерный путь: {LOGS_CONTAINER_PATH})",
+                )
                 await self._retry_on_connect_error(
                     update.message.reply_text,
                     "📭 Папка logs пуста или отсутствует",
@@ -254,10 +260,15 @@ class CommandHandlers:
         # Отправляем в порядке от старых к новым
         for lf in sorted(candidates, key=lambda p: p.name):
             try:
+                self.logger.info(
+                    f"Отправляю лог-файл {lf} (контейнерный путь: {LOGS_CONTAINER_PATH}/{lf.name})",
+                )
                 with lf.open("rb") as fh:
                     await context.bot.send_document(chat_id=update.effective_chat.id, document=fh, filename=lf.name)
             except Exception as e:
-                self.logger.warning(f"Ошибка при отправке лога {lf}: {e}")
+                self.logger.warning(
+                    f"Ошибка при отправке лога {lf} (контейнерный путь: {LOGS_CONTAINER_PATH}/{lf.name}): {e}",
+                )
         try:
             await self._retry_on_connect_error(
                 update.message.reply_text,
@@ -647,12 +658,17 @@ class CommandHandlers:
                     max_retries=MAX_RETRIES_DEFAULT,
                     delay=RETRY_DELAY_DEFAULT,
                 )
-                # Сохраним локально результат
+                # Сохраним локально результат.
+                # В контейнере путь data/frogs соответствует /app/data/frogs,
+                # который примонтирован в Docker volume `frog_images`.
                 try:
-                    saved_path = self.image_generator.save_image_locally(image_data, folder="data/frogs", prefix="frog")
+                    saved_path = self.image_generator.save_image_locally(image_data, prefix="frog")
                     if saved_path:
-                        self.logger.info(f"Изображение сохранено локально: {saved_path}")
+                        self.logger.info(
+                            f"Изображение сохранено локально и доступно в контейнере по пути {saved_path}",
+                        )
                 except Exception:
+                    # Ошибка локального сохранения не критична для пользователя.
                     pass
                 # Успешная генерация — увеличиваем счетчик
                 if usage:
@@ -1233,14 +1249,13 @@ class CommandHandlers:
                     image_data, caption = result
                     # Сохраняем изображение локально
                     try:
-                        saved_path = self.image_generator.save_image_locally(
-                            image_data,
-                            folder="data/frogs",
-                            prefix="frog",
-                        )
+                        saved_path = self.image_generator.save_image_locally(image_data, prefix="frog")
                         if saved_path:
-                            self.logger.info(f"Изображение сохранено локально: {saved_path}")
+                            self.logger.info(
+                                f"Изображение сохранено локально и доступно в контейнере по пути {saved_path}",
+                            )
                     except Exception:
+                        # Ошибка локального сохранения не должна ломать рассылку.
                         pass
                     # Увеличиваем счетчик использования
                     if usage:

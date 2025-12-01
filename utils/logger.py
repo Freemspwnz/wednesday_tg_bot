@@ -7,7 +7,6 @@ import inspect
 import sys
 from collections.abc import Callable
 from functools import wraps
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 
 from loguru import logger
@@ -16,6 +15,7 @@ if TYPE_CHECKING:
     from loguru import Logger as LoggerType
 
 from utils.config import config
+from utils.paths import LOGS_CONTAINER_PATH, resolve_logs_dir
 
 
 def setup_logger() -> None:
@@ -32,8 +32,11 @@ def setup_logger() -> None:
     # Удаляем стандартный обработчик loguru
     logger.remove()
 
-    # Создаем папку для логов, если её нет
-    log_dir = Path("logs")
+    # Создаем папку для логов, если её нет.
+    # Используем относительный путь (logs/), который внутри Docker-контейнера
+    # при WORKDIR=/app будет соответствовать /app/logs и будет примонтирован
+    # в volume. При локальном запуске логи пишутся в ./logs рядом с проектом.
+    log_dir = resolve_logs_dir()
     log_dir.mkdir(exist_ok=True)
 
     # Настраиваем вывод в консоль с цветами
@@ -47,7 +50,10 @@ def setup_logger() -> None:
         colorize=True,
     )
 
-    # Настраиваем вывод в файл с подробной информацией
+    # Настраиваем вывод в файл с подробной информацией.
+    # Обратите внимание: фактический путь внутри контейнера будет
+    # /app/logs/wednesday_bot_YYYY-MM-DD.log, что соответствует
+    # монтируемому Docker volume `logs`.
     logger.add(
         log_dir / "wednesday_bot_{time:YYYY-MM-DD}.log",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | {message}",
@@ -59,8 +65,10 @@ def setup_logger() -> None:
         diagnose=True,  # Показывать переменные в ошибках
     )
 
-    # Логируем успешную инициализацию
-    logger.info("Система логирования успешно настроена")
+    # Логируем успешную инициализацию с явным указанием контейнерного пути.
+    logger.info(
+        f"Система логирования успешно настроена, логи пишутся в {LOGS_CONTAINER_PATH}",
+    )
 
 
 def get_logger(name: str | None = None) -> "LoggerType":
