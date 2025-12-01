@@ -24,7 +24,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
-from asyncpg import UniqueViolation
+from asyncpg import UniqueViolationError
 
 from utils.logger import get_logger, log_all_methods
 from utils.paths import FROG_IMAGES_CONTAINER_PATH, resolve_frog_images_dir
@@ -190,49 +190,55 @@ class ImagesStore:
                         self._logger.debug(f"Не удалось удалить временный файл изображения: {fs_tmp_path}")
 
         # 2. Вставляем или находим запись в БД.
+        #
+        # Важно: не оборачиваем операции в явный transaction‑контекст asyncpg.
+        # При ошибке UniqueViolationError сама команда INSERT откатывается,
+        # но соединение остаётся пригодным для последующих запросов SELECT.
+        # Это позволяет реализовать паттерн "insert-or-select" без состояния
+        # "current transaction is aborted" для всей сессии.
         pool = get_postgres_pool()
         async with pool.acquire() as conn:
-            async with conn.transaction():
-                try:
-                    row = await conn.fetchrow(
-                        """
-                        INSERT INTO images (image_hash, prompt_hash, path)
-                        VALUES ($1, $2, $3)
-                        RETURNING id, image_hash, prompt_hash, path, created_at;
-                        """,
-                        image_hash,
-                        prompt_hash,
-                        db_path,
-                    )
-                    if row is not None:
-                        record = self._row_to_record(row)
-                        self._logger.info(
-                            "Добавлена запись об изображении: "
-                            f"prompt_hash={record.prompt_hash} image_hash={record.image_hash}",
-                        )
-                        return record
-                except UniqueViolation:
-                    # Гонка: другая транзакция успела вставить запись.
-                    self._logger.info(
-                        (
-                            "Обнаружена гонка при вставке в таблицу images: "
-                            f"дубликат ключа для image_hash={image_hash} или prompt_hash={prompt_hash}, "
-                            "загружаю уже существующую запись"
-                        ),
-                    )
-
-                # Находим уже существующую запись (по prompt_hash — приоритетно, затем по image_hash).
+            try:
                 row = await conn.fetchrow(
                     """
-                    SELECT id, image_hash, prompt_hash, path, created_at
-                    FROM images
-                    WHERE prompt_hash = $1 OR image_hash = $2
-                    ORDER BY created_at ASC
-                    LIMIT 1;
+                    INSERT INTO images (image_hash, prompt_hash, path)
+                    VALUES ($1, $2, $3)
+                    RETURNING id, image_hash, prompt_hash, path, created_at;
                     """,
-                    prompt_hash,
                     image_hash,
+                    prompt_hash,
+                    db_path,
                 )
+                if row is not None:
+                    record = self._row_to_record(row)
+                    self._logger.info(
+                        "Добавлена запись об изображении: "
+                        f"prompt_hash={record.prompt_hash} image_hash={record.image_hash}",
+                    )
+                    return record
+            except UniqueViolationError:
+                # Гонка: другая транзакция успела вставить запись.
+                # Просто логируем и переходим к чтению уже существующей записи.
+                self._logger.info(
+                    (
+                        "Обнаружена гонка при вставке в таблицу images: "
+                        f"дубликат ключа для image_hash={image_hash} или prompt_hash={prompt_hash}, "
+                        "загружаю уже существующую запись"
+                    ),
+                )
+
+            # Находим уже существующую запись (по prompt_hash — приоритетно, затем по image_hash).
+            row = await conn.fetchrow(
+                """
+                SELECT id, image_hash, prompt_hash, path, created_at
+                FROM images
+                WHERE prompt_hash = $1 OR image_hash = $2
+                ORDER BY created_at ASC
+                LIMIT 1;
+                """,
+                prompt_hash,
+                image_hash,
+            )
 
         if row is None:  # pragma: no cover - крайне маловероятный деградационный сценарий
             raise RuntimeError("Failed to upsert image metadata: concurrent insert lost")

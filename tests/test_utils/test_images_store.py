@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -77,8 +78,11 @@ async def test_get_or_create_image_handles_concurrent_insert(
     async def _create_with_store2() -> None:
         await store2.get_or_create_image(prompt_hash, image_bytes)
 
-    # Параллельный запуск двух корутин.
-    await pytest.gather(_create_with_store1(), _create_with_store2())
+    # Параллельный запуск двух корутин через asyncio.gather даёт нам
+    # реалистичный сценарий гонки в одной event loop. Это важно для
+    # проверки того, что upsert-логика в ImagesStore корректно обрабатывает
+    # duplicate key и всегда возвращает одну консистентную запись.
+    await asyncio.gather(_create_with_store1(), _create_with_store2())
 
     # В таблице должна быть одна запись для этого prompt_hash.
     images_store = ImagesStore()

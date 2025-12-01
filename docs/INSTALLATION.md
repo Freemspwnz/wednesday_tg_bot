@@ -243,6 +243,18 @@ docker compose up -d --build
 docker compose logs -f bot
 ```
 
+4. При первом развёртывании (и при изменении схемы) рекомендуется явно прогнать миграции
+   против целевой базы данных:
+
+```bash
+POSTGRES_USER=your_postgres_user \
+POSTGRES_PASSWORD=your_postgres_password \
+POSTGRES_DB=wednesdaydb \
+POSTGRES_HOST=localhost \
+POSTGRES_PORT=5432 \
+make migrate
+```
+
 ### Вариант B. Нативный запуск
 
 **Linux/macOS:**
@@ -513,6 +525,35 @@ docker run --rm -v wednesday_tg_bot_logs:/data -v "$PWD":/backup alpine \
 docker run --rm -v wednesday_tg_bot_prompt_storage:/data -v "$PWD":/backup alpine \
   sh -c "cd /data && tar czf /backup/prompt_storage_backup.tgz ."
 ```
+
+## Тесты и CI
+
+- Запуск тестов локально (с использованием `docker-compose.test.yml`):
+
+```bash
+make test        # базовый набор тестов
+make test-cov    # тесты + покрытие
+```
+
+- Запуск строгой проверки типов и линтера:
+
+```bash
+make lint
+make type
+```
+
+- Полный локальный CI-пайплайн:
+
+```bash
+make ci
+```
+
+В репозитории настроен workflow GitHub Actions `.github/workflows/ci.yml`, который:
+
+- поднимает сервисные контейнеры Postgres и Redis в job;
+- выполняет миграции (`make migrate`);
+- запускает pytest (`make test-cov`);
+- собирает Docker-образ с помощью `make build`.
 
 ### Перезапуск бота
 

@@ -48,6 +48,20 @@ services:
       timeout: 3s
       retries: 5
 
+  bot-init:
+    image: wednesday-bot:local
+    container_name: wednesday_bot_init
+    restart: "no"
+    # Init-контейнер запускается от root, чтобы один раз выставить права
+    # на томах (logs, frog_images, prompt_storage). Основной бот потом
+    # работает под пользователем app из Dockerfile.
+    user: "0:0"
+    volumes:
+      - frog_images:/app/data/frogs
+      - logs:/app/logs
+      - prompt_storage:/app/data/prompts
+    command: ["/bin/sh", "-lc", "mkdir -p /app/logs /app/data/frogs /app/data/prompts && chown -R app:app /app/logs /app/data/frogs /app/data/prompts"]
+
   bot:
     image: wednesday-bot:local
     container_name: wednesday_bot
@@ -57,6 +71,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      bot-init:
+        condition: service_completed_successfully
     env_file:
       - .env
     environment:

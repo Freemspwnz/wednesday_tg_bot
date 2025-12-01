@@ -38,8 +38,10 @@ jobs:
         id: vars
         run: |
           TAG="${GITHUB_REF##*/}"
+          REPO_OWNER_LOWER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "latest=latest" >> $GITHUB_OUTPUT
+          echo "repo_owner=${REPO_OWNER_LOWER}" >> $GITHUB_OUTPUT
 
       - name: Build and Push image
         uses: docker/build-push-action@v6
@@ -48,7 +50,7 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ inputs.image-name }}:${{ steps.vars.outputs.tag }}
-            ghcr.io/${{ github.repository_owner }}/${{ inputs.image-name }}:${{ steps.vars.outputs.latest }}
+            ghcr.io/${{ steps.vars.outputs.repo_owner }}/${{ inputs.image-name }}:${{ steps.vars.outputs.tag }}
+            ghcr.io/${{ steps.vars.outputs.repo_owner }}/${{ inputs.image-name }}:${{ steps.vars.outputs.latest }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

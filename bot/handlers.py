@@ -100,7 +100,7 @@ class CommandHandlers:
             raw = int(context.args[0])
             self.logger.info(f"set_frog_limit_command: запрошенный порог: {raw}")
             if raw <= 0:
-                raise ValueError
+                raise ValueError(f"Порог должен быть положительным числом, получено: {raw}")
             # Ограничим максимумом MAX_FROG_THRESHOLD
             desired = min(raw, MAX_FROG_THRESHOLD)
             usage = context.application.bot_data.get("usage")

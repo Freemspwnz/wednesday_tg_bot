@@ -163,3 +163,17 @@ async def ensure_schema() -> None:
                 raise
 
     logger.info("Схема Postgres успешно проверена/инициализирована")
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    from utils.postgres_client import close_postgres_pool, init_postgres_pool
+
+    async def _main() -> None:
+        # Инициализируем пул соединений на основе переменных окружения
+        await init_postgres_pool(min_size=1, max_size=2)
+        await ensure_schema()
+        await close_postgres_pool()
+
+    asyncio.run(_main())

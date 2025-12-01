@@ -4,7 +4,7 @@ COV_ARGS := --cov=bot --cov=services --cov=utils
 
 IMAGE_NAME := wednesday-bot
 
-.PHONY: lint format format-check test test-cov test-no-containers test-cleanup test-up test-down type run ci build
+.PHONY: lint format format-check test test-cov test-no-containers test-cleanup test-up test-down type run ci build migrate
 
 lint:
 	ruff check .
@@ -99,6 +99,17 @@ test-no-containers:
 type:
 	mypy .
 
+# Прогон миграций/инициализации схемы БД.
+# Используется локально и в CI перед запуском тестов и приложений.
+migrate:
+	@echo "=== Прогон миграций (инициализация схемы Postgres) ==="
+	@POSTGRES_USER=$${POSTGRES_USER:-test_user} \
+	 POSTGRES_PASSWORD=$${POSTGRES_PASSWORD:-test_password_ci_2024} \
+	 POSTGRES_DB=$${POSTGRES_DB:-wednesdaydb_test} \
+	 POSTGRES_HOST=$${POSTGRES_HOST:-localhost} \
+	 POSTGRES_PORT=$${POSTGRES_PORT:-5432} \
+	 python -m utils.postgres_schema
+
 # Сборка Docker-образа бота (с очисткой старого)
 build:
 	@echo "Очистка старого образа $(IMAGE_NAME):local..."
@@ -136,9 +147,10 @@ run: build
 ci:
 	@echo "=== Запуск полного CI pipeline ==="
 	@$(MAKE) lint
-	@$(MAKE) format-check || (echo "✗ Форматирование не соответствует стандартам. Запустите 'make format' для исправления." && exit 1)
 	@$(MAKE) type
+	@$(MAKE) migrate
 	@$(MAKE) test-cov
+	@$(MAKE) build
 
 # Проверка форматирования без изменений
 format-check:

@@ -129,8 +129,29 @@ async def close_postgres_pool() -> None:
 
     if _pool is not None:
         try:
+            # Проверяем, что event loop еще работает
+            try:
+                loop = asyncio.get_running_loop()
+                if loop.is_closed():
+                    logger.warning("Event loop уже закрыт, пропускаем закрытие пула Postgres")
+                    _pool = None
+                    _pool_loop = None
+                    return
+            except RuntimeError:
+                # Нет работающего event loop
+                logger.warning("Нет работающего event loop, пропускаем закрытие пула Postgres")
+                _pool = None
+                _pool_loop = None
+                return
+
             await _pool.close()
             logger.info("Пул Postgres успешно закрыт")
+        except RuntimeError as exc:
+            error_msg = str(exc)
+            if "Event loop is closed" in error_msg:
+                logger.warning("Event loop закрыт во время закрытия пула Postgres — это нормально при shutdown")
+            else:
+                logger.error(f"RuntimeError при закрытии пула Postgres: {exc}")
         except Exception as exc:  # pragma: no cover - защитное логирование
             logger.error(f"Ошибка при закрытии пула Postgres: {exc}")
         finally:

@@ -71,6 +71,36 @@ async def record_metric(  # noqa: PLR0913
         }
         await safe_redis_call("xadd", "metrics:events", fields)
 
+        # Дополнительно стараемся синхронно зафиксировать событие в таблице Postgres.
+        # Это делает события наблюдаемыми через SQL (в том числе в тестах и админских
+        # diagnostics), при этом ошибка записи в БД не должна влиять на горячий путь.
+        try:
+            pool = get_postgres_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO metrics_events (
+                        event_type,
+                        user_id,
+                        prompt_hash,
+                        image_hash,
+                        latency_ms,
+                        status
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6);
+                    """,
+                    event_type,
+                    user_id,
+                    prompt_hash,
+                    image_hash,
+                    latency_ms,
+                    status,
+                )
+        except Exception as db_exc:  # pragma: no cover - best-effort запись в БД
+            _logger.warning(
+                f"record_metric: не удалось синхронно сохранить событие метрики в Postgres: {db_exc}",
+            )
+
         _logger.info(
             "Событие метрики записано: "
             f"type={event_type} prompt={prompt_hash} user={user_id} image={image_hash} "

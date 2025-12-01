@@ -1100,12 +1100,26 @@ class ImageGenerator:
                 # Продолжаем работу, даже если не удалось очистить старые файлы
 
             return str(file_path)
+        except PermissionError as e:
+            self.logger.error(
+                f"Ошибка доступа при сохранении изображения в {folder}: {e}. "
+                f"Проверьте права на запись в директорию (контейнерный путь: {FROG_IMAGES_CONTAINER_PATH})."
+            )
+            return ""
+        except OSError as e:
+            self.logger.error(
+                f"Ошибка файловой системы при сохранении изображения в {folder}: {e}. "
+                f"Возможно, недостаточно места на диске или проблема с файловой системой "
+                f"(контейнерный путь: {FROG_IMAGES_CONTAINER_PATH})."
+            )
+            return ""
         except Exception as e:
             self.logger.error(
                 (
-                    f"Ошибка при сохранении изображения в директорию {folder} "
+                    f"Неожиданная ошибка при сохранении изображения в директорию {folder} "
                     f"(контейнерный путь: {FROG_IMAGES_CONTAINER_PATH}): {e}"
                 ),
+                exc_info=True,
             )
             return ""
 

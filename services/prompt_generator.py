@@ -30,6 +30,7 @@ TIMEOUT_PROMPT_LONG_SECONDS = 120
 MAX_TOKENS_DEFAULT = 300
 HTTP_STATUS_OK = 200
 MAX_ERROR_TEXT_LENGTH = 100
+AUTH_KEY_PREVIEW_LENGTH = 10  # Длина превью ключа авторизации для логирования
 
 
 NEWLINE_CHARS = {"\n", "\r"}
@@ -229,6 +230,20 @@ class GigaChatClient:
             return self.access_token
 
         try:
+            # Проверяем наличие authorization_key
+            if not self.authorization_key:
+                self.logger.error("GIGACHAT_AUTHORIZATION_KEY не установлен в конфигурации")
+                return None
+
+            # Логируем диагностическую информацию (без вывода полного ключа)
+            key_length = len(self.authorization_key)
+            key_preview = (
+                self.authorization_key[:AUTH_KEY_PREVIEW_LENGTH] + "..."
+                if key_length > AUTH_KEY_PREVIEW_LENGTH
+                else "*" * min(key_length, AUTH_KEY_PREVIEW_LENGTH)
+            )
+            self.logger.debug(f"Используется authorization_key длиной {key_length} символов: {key_preview}")
+
             headers = {
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Accept": "application/json",
@@ -256,7 +271,12 @@ class GigaChatClient:
                 self.logger.info("Успешно получен access token для GigaChat")
                 return self.access_token
             else:
-                self.logger.error(f"Ошибка аутентификации GigaChat: {response.status_code} - {response.text}")
+                error_text = response.text[:MAX_ERROR_TEXT_LENGTH] if response.text else "нет текста ошибки"
+                self.logger.error(
+                    f"Ошибка аутентификации GigaChat: {response.status_code} - {error_text}. "
+                    f"Проверьте, что GIGACHAT_AUTHORIZATION_KEY правильно настроен "
+                    f"(должен быть в формате base64, без пробелов или с правильным форматом Basic auth)"
+                )
                 return None
 
         except requests.exceptions.Timeout as e:
